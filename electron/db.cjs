@@ -64,6 +64,7 @@ function initDatabase() {
         patient_id TEXT,
         name TEXT,
         path TEXT,
+        category TEXT DEFAULT 'general',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         deleted_at DATETIME,
         FOREIGN KEY(patient_id) REFERENCES patients(id)
@@ -77,6 +78,7 @@ function initDatabase() {
   try { db.exec("ALTER TABLE patients ADD COLUMN address TEXT"); } catch(e){}
   try { db.exec("ALTER TABLE patients ADD COLUMN anamnesis TEXT"); } catch(e){}
   try { db.exec("ALTER TABLE patients ADD COLUMN deleted_at DATETIME"); } catch(e){}
+  try { db.exec("ALTER TABLE documents ADD COLUMN category TEXT DEFAULT 'general'"); } catch(e){}
   
   try { db.exec("ALTER TABLE sessions ADD COLUMN payment_value REAL"); } catch(e){}
   try { db.exec("ALTER TABLE sessions ADD COLUMN payment_method TEXT"); } catch(e){}
@@ -113,6 +115,14 @@ function startLocalServer() {
       });
     } else { res.writeHead(404); res.end(); }
   });
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.warn(`Main DB: Porta ${SERVER_PORT} em uso. Outra instância deve estar ativa.`);
+    } else {
+      console.error('Main DB: Erro no servidor local:', err.message);
+    }
+  });
+
   server.listen(SERVER_PORT, '127.0.0.1', () => {
     console.log(`Main DB: Servidor local rodando em http://127.0.0.1:${SERVER_PORT}`);
   });
@@ -140,7 +150,7 @@ ipcMain.handle('db-export', async (event) => {
   return { success: false };
 });
 
-ipcMain.handle('file-upload', async (event, { patientId }) => {
+ipcMain.handle('file-upload', async (event, { patientId, category = 'general' }) => {
     const { filePaths } = await dialog.showOpenDialog({
         title: 'Selecionar Documento',
         properties: ['openFile'],
@@ -159,7 +169,7 @@ ipcMain.handle('file-upload', async (event, { patientId }) => {
         fs.copyFileSync(sourcePath, destPath);
         
         const id = require('crypto').randomUUID();
-        db.prepare('INSERT INTO documents (id, patient_id, name, path) VALUES (?, ?, ?, ?)').run(id, patientId, fileName, destPath);
+        db.prepare('INSERT INTO documents (id, patient_id, name, path, category) VALUES (?, ?, ?, ?, ?)').run(id, patientId, fileName, destPath, category);
         
         return { success: true, fileName };
     }
@@ -175,4 +185,17 @@ ipcMain.handle('file-open', async (event, { filePath }) => {
     return { success: false, error: 'Arquivo não encontrado' };
 });
 
-module.exports = { initDatabase };
+ipcMain.handle('file-delete', async (event, { id }) => {
+    try {
+        db.prepare('UPDATE documents SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?').run(id);
+        return { success: true };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+});
+
+function getDb() {
+  return db;
+}
+
+module.exports = { initDatabase, getDb };

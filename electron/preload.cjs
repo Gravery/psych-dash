@@ -7,7 +7,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     export: () => ipcRenderer.invoke('db-export')
   },
   file: {
-    upload: (patientId) => ipcRenderer.invoke('file-upload', { patientId }),
-    open: (filePath) => ipcRenderer.invoke('file-open', { filePath })
-  }
+    upload: (patientId, category = 'general') => ipcRenderer.invoke('file-upload', { patientId, category }),
+    open: (filePath) => ipcRenderer.invoke('file-open', { filePath }),
+    delete: (id) => ipcRenderer.invoke('file-delete', { id })
+  },
+  updateAppSettings: (settings) => ipcRenderer.invoke('update-app-settings', settings)
 });

@@ -9,8 +9,11 @@ import SessionDetail from './components/Calendar/SessionDetail.tsx';
 import FinancialReport from './components/Financial/FinancialReport.tsx';
 import ThemeToggle from './components/ThemeToggle.tsx';
 import ErrorLogger from './components/ErrorLogger.tsx';
-import { initDB } from './db/db';
+import SettingsPage from './components/Settings/SettingsPage.tsx';
+import { initDB, querySQL } from './db/db';
 import { isAuthenticated } from './utils/auth';
+import { useNotifications } from './hooks/useNotifications';
+import OnboardingModal from './components/Settings/OnboardingModal.tsx';
 
 const App: React.FC = () => {
   const [isLoggedIn, setIsLoggedIn] = useState(isAuthenticated());
@@ -18,6 +21,10 @@ const App: React.FC = () => {
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [isDBReady, setIsDBReady] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+
+  // Ativar monitor de notificações
+  useNotifications();
 
   useEffect(() => {
     const savedTheme = localStorage.getItem('theme');
@@ -27,8 +34,22 @@ const App: React.FC = () => {
     document.documentElement.classList.toggle('dark', isDark);
 
     if (isLoggedIn) {
-      initDB().then(() => {
+      initDB().then(async () => {
         setIsDBReady(true);
+        // Verificar primeiro acesso
+        try {
+          const mode: any = await querySQL("SELECT value FROM config WHERE key = 'execution_mode'");
+          if (!mode || mode.length === 0) {
+            setShowOnboarding(true);
+          }
+          
+          const config: any = await querySQL("SELECT value FROM config WHERE key = 'accent_color'");
+          if (config && config.length > 0) {
+            document.documentElement.style.setProperty('--accent-primary', config[0].value);
+          }
+        } catch (e) {
+          console.error('Erro ao carregar configurações iniciais:', e);
+        }
       }).catch(err => {
         console.error('DB Init Error:', err);
       });
@@ -71,6 +92,8 @@ const App: React.FC = () => {
         return <CalendarView />;
       case 'reports':
         return <FinancialReport />;
+      case 'settings':
+        return <SettingsPage />;
       case 'session-detail':
         return <SessionDetail id={selectedSessionId} onBack={() => setActiveTab('dashboard')} />;
       default:
@@ -92,6 +115,7 @@ const App: React.FC = () => {
         {renderContent()}
       </main>
       <ErrorLogger />
+      {showOnboarding && <OnboardingModal onComplete={() => setShowOnboarding(false)} />}
     </div>
   );
 };

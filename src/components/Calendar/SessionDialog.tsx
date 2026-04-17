@@ -137,7 +137,7 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ session, onClose, onUpdat
               <Clock size={16} color="#38bdf8" strokeWidth={2.5} style={{ stroke: '#38bdf8' }} /> STATUS DA SESSÃO
             </label>
             <select
-              value={editedSession.status}
+              value={editedSession.status || 'scheduled'}
               onChange={e => setEditedSession({ ...editedSession, status: e.target.value })}
               style={{ width: '100%', padding: '8px' }}
             >
@@ -153,7 +153,7 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ session, onClose, onUpdat
               <DollarSign size={16} color="#38bdf8" strokeWidth={2.5} style={{ stroke: '#38bdf8' }} /> PAGAMENTO
             </label>
             <select
-              value={editedSession.payment_status}
+              value={editedSession.payment_status || 'pending'}
               onChange={e => setEditedSession({ ...editedSession, payment_status: e.target.value })}
               style={{ width: '100%', padding: '8px' }}
             >
@@ -171,8 +171,18 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ session, onClose, onUpdat
           </label>
           <input
             type="datetime-local"
-            value={editedSession.start_time.slice(0, 16)}
-            onChange={e => setEditedSession({ ...editedSession, start_time: new Date(e.target.value).toISOString() })}
+            value={
+              editedSession.start_time
+                ? (() => {
+                    const d = new Date(editedSession.start_time);
+                    return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+                  })()
+                : ''
+            }
+            onChange={e => {
+              const localDate = new Date(e.target.value);
+              setEditedSession({ ...editedSession, start_time: localDate.toISOString() });
+            }}
             style={{ width: '100%' }}
           />
         </div>

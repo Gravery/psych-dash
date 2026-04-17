@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { hashPassword, getStoredPassword, setStoredPassword, setAuthenticated } from '../../utils/auth';
+import { hashPassword, getStoredPassword, setStoredPassword, setAuthenticated, getDBPassword, saveDBPassword } from '../../utils/auth';
 import { Lock } from 'lucide-react';
 
 interface LoginPageProps {
@@ -10,10 +10,28 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [isFirstTime, setIsFirstTime] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    setIsFirstTime(!getStoredPassword());
+    const checkPassword = async () => {
+      setIsLoading(true);
+      const localPwd = getStoredPassword();
+      const dbPwd = await getDBPassword();
+      
+      if (!localPwd && !dbPwd) {
+        setIsFirstTime(true);
+      } else {
+        setIsFirstTime(false);
+        // Sincronizar local se existir no DB
+        if (dbPwd && !localPwd) {
+          setStoredPassword(dbPwd);
+        }
+      }
+      setIsLoading(false);
+    };
+    
+    checkPassword();
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -31,11 +49,13 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
       }
       const hashed = await hashPassword(password);
       setStoredPassword(hashed);
+      await saveDBPassword(hashed); // Salvar também no banco
       setAuthenticated(true);
       onLogin();
     } else {
       const hashed = await hashPassword(password);
-      if (hashed === getStoredPassword()) {
+      const stored = getStoredPassword();
+      if (hashed === stored) {
         setAuthenticated(true);
         onLogin();
       } else {
@@ -43,6 +63,17 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
       }
     }
   };
+
+  if (isLoading) {
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)'
+      }}>
+        <div style={{ width: '40px', height: '40px', border: '4px solid var(--accent-primary)', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
 
   return (
     <div style={{

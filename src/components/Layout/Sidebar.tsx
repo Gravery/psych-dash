@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, Users, Calendar, LogOut, Download, FileSpreadsheet, Smartphone, FileText } from 'lucide-react';
+import { Home, Users, Calendar, LogOut, Download, FileSpreadsheet, Smartphone, FileText, Settings } from 'lucide-react';
 import { exportDB, querySQL } from '../../db/db';
 
 interface SidebarProps {
@@ -13,6 +13,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
     { id: 'patients', label: 'Pacientes', icon: Users },
     { id: 'calendar', label: 'Agenda', icon: Calendar },
     { id: 'reports', label: 'Relatórios', icon: FileText },
+    { id: 'settings', label: 'Configurações', icon: Settings },
   ];
 
   return (

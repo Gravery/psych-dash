@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Save, FileText, Plus, Clock, History, File, Download, Upload, DollarSign, Calendar as CalendarIcon, Repeat } from 'lucide-react';
+import { ArrowLeft, Save, FileText, Plus, Clock, History, File, Download, Upload, DollarSign, Calendar as CalendarIcon, Repeat, Trash2 } from 'lucide-react';
 import { querySQL, execSQL } from '../../db/db';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -9,6 +9,7 @@ interface Document {
   id: string;
   name: string;
   path: string;
+  category: string;
   created_at: string;
 }
 
@@ -171,9 +172,9 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
     }
   };
 
-  const handleFileUpload = async () => {
+  const handleFileUpload = async (category: string = 'general') => {
     if (!id) return;
-    const res = await (window as any).electronAPI.file.upload(id);
+    const res = await (window as any).electronAPI.file.upload(id, category);
     if (res.success) {
       fetchData();
       setToast({ message: 'Documento anexado!', type: 'success' });
@@ -182,6 +183,25 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
 
   const handleFileOpen = async (path: string) => {
     await (window as any).electronAPI.file.open(path);
+  };
+
+  const handleFileDelete = async (id: string, name: string) => {
+    if (!window.confirm(`Tem certeza que deseja excluir o arquivo "${name}"?`)) return;
+    
+    const api = (window as any).electronAPI;
+    if (!api?.file?.delete) {
+      console.error('API de exclusão não encontrada. Reinicie o aplicativo.');
+      setToast({ message: 'Erro técnico: Reinicie o app para aplicar a atualização.', type: 'error' });
+      return;
+    }
+
+    const res = await api.file.delete(id);
+    if (res.success) {
+      fetchData();
+      setToast({ message: 'Arquivo excluído!', type: 'success' });
+    } else {
+      setToast({ message: 'Erro ao excluir arquivo.', type: 'error' });
+    }
   };
 
   const handleDrop = async (e: React.DragEvent) => {
@@ -271,6 +291,9 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
   };
 
   if (!patient) return null;
+
+  const generalDocs = documents.filter(d => !d.category || d.category === 'general');
+  const anamnesisDocs = documents.filter(d => d.category === 'anamnesis');
 
   return (
     <div style={{ maxWidth: '1200px', margin: '0 auto', position: 'relative' }}>
@@ -518,8 +541,69 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
             value={anamnesis}
             onChange={(e) => setAnamnesis(e.target.value)}
             placeholder="História de vida, queixa principal, antecedentes familiares..."
-            style={{ width: '100%', minHeight: '500px', lineHeight: '1.6' }}
+            style={{ width: '100%', minHeight: '300px', lineHeight: '1.6', marginBottom: '24px' }}
           />
+
+          <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '24px' }}>
+            <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div>
+                <h4 style={{ fontWeight: 'bold', fontSize: '15px' }}>Anexos da Anamnese</h4>
+                <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Testes, desenhos, fotos ou relatórios iniciais específicos do paciente.</p>
+              </div>
+              <button onClick={() => handleFileUpload('anamnesis')} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', border: '1px solid var(--border-color)' }}>
+                <Upload size={14} /> Anexar Arquivo
+              </button>
+            </header>
+            
+            {anamnesisDocs.length > 0 ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '16px' }}>
+                {anamnesisDocs.map(doc => (
+                  <div 
+                    key={doc.id} 
+                    onClick={() => handleFileOpen(doc.path)}
+                    className="card" 
+                    style={{ 
+                      padding: '12px', 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      gap: '12px', 
+                      backgroundColor: 'var(--bg-secondary)', 
+                      border: '1px solid var(--border-color)',
+                      cursor: 'pointer',
+                      transition: 'background-color 0.2s',
+                      position: 'relative'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(14, 165, 233, 0.05)'}
+                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-secondary)'}
+                  >
+                    <div style={{ width: '40px', height: '40px', borderRadius: '8px', backgroundColor: 'rgba(14, 165, 233, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-primary)', flexShrink: 0 }}>
+                      <File size={20} />
+                    </div>
+                    <div style={{ overflow: 'hidden', flex: 1 }}>
+                      <p style={{ fontSize: '12px', fontWeight: '600', marginBottom: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.name}</p>
+                    </div>
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); handleFileDelete(doc.id, doc.name); }} 
+                      style={{ 
+                        padding: '6px', 
+                        color: 'var(--error)', 
+                        background: 'none', 
+                        border: 'none', 
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center'
+                      }}
+                      title="Excluir"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p style={{ fontSize: '13px', color: 'var(--text-secondary)', fontStyle: 'italic' }}>Nenhum arquivo anexado à anamnese ainda.</p>
+            )}
+          </div>
         </div>
       )}
 
@@ -539,24 +623,67 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
               <h3 style={{ fontWeight: 'bold' }}>Documentos e Anexos</h3>
               <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Contratos, exames e avaliações externas.</p>
             </div>
-            <button onClick={handleFileUpload} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button onClick={() => handleFileUpload('general')} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Upload size={18} /> Anexar Documento
             </button>
           </header>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '20px' }}>
-            {documents.map(doc => (
-              <div key={doc.id} className="card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center', textAlign: 'center', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+            {generalDocs.map(doc => (
+              <div 
+                key={doc.id} 
+                onClick={() => handleFileOpen(doc.path)}
+                className="card" 
+                style={{ 
+                  padding: '16px', 
+                  display: 'flex', 
+                  flexDirection: 'column', 
+                  gap: '12px', 
+                  alignItems: 'center', 
+                  textAlign: 'center', 
+                  backgroundColor: 'var(--bg-secondary)', 
+                  border: '1px solid var(--border-color)',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                  position: 'relative'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = 'rgba(14, 165, 233, 0.05)';
+                  e.currentTarget.style.borderColor = 'var(--accent-primary)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'var(--bg-secondary)';
+                  e.currentTarget.style.borderColor = 'var(--border-color)';
+                }}
+              >
+                <button 
+                  onClick={(e) => { e.stopPropagation(); handleFileDelete(doc.id, doc.name); }}
+                  style={{
+                    position: 'absolute',
+                    top: '8px',
+                    right: '8px',
+                    padding: '6px',
+                    borderRadius: '50%',
+                    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                    color: 'var(--error)',
+                    border: 'none',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 2
+                  }}
+                  title="Excluir"
+                >
+                  <Trash2 size={14} />
+                </button>
                 <div style={{ width: '50px', height: '50px', borderRadius: '12px', backgroundColor: 'rgba(14, 165, 233, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-primary)' }}>
                   <File size={24} />
                 </div>
-                <div style={{ flex: 1 }}>
-                  <p style={{ fontSize: '13px', fontWeight: '600', marginBottom: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', width: '160px' }}>{doc.name}</p>
+                <div style={{ flex: 1, width: '100%' }}>
+                  <p style={{ fontSize: '13px', fontWeight: '600', marginBottom: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', width: '100%' }}>{doc.name}</p>
                   <p style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{new Date(doc.created_at).toLocaleDateString()}</p>
                 </div>
-                <button onClick={() => handleFileOpen(doc.path)} className="btn-ghost" style={{ width: '100%', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
-                  <Download size={14} /> Abrir Arquivo
-                </button>
               </div>
             ))}
           </div>
