@@ -29,27 +29,38 @@ const Dashboard: React.FC<DashboardProps> = (props) => {
 
       const pActive: any = await querySQL("SELECT COUNT(*) as count FROM patients WHERE status = 'active' AND deleted_at IS NULL");
       const sToday: any = await querySQL(
-        'SELECT s.*, p.name as patient_name FROM sessions s JOIN patients p ON s.patient_id = p.id WHERE s.start_time BETWEEN ? AND ? AND s.deleted_at IS NULL',
+        "SELECT s.*, p.name as patient_name FROM sessions s JOIN patients p ON s.patient_id = p.id WHERE s.start_time BETWEEN ? AND ? AND s.deleted_at IS NULL AND (s.type IS NULL OR s.type = 'session')",
         [todayStart.toISOString(), todayEnd.toISOString()]
       );
 
       const firstDayMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
       const lastDayMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0, 23, 59, 59).toISOString();
+      
+      // Pendentes: sessões pendentes + cobranças pendentes
       const sPending: any = await querySQL(
-        "SELECT SUM(payment_value) as total FROM sessions WHERE payment_status = 'pending' AND start_time BETWEEN ? AND ? AND deleted_at IS NULL",
+        "SELECT SUM(payment_value) as total FROM sessions WHERE payment_status = 'pending' AND start_time BETWEEN ? AND ? AND deleted_at IS NULL AND (type IS NULL OR type = 'session')",
+        [firstDayMonth, lastDayMonth]
+      );
+      const bPending: any = await querySQL(
+        "SELECT SUM(amount) as total FROM billing_reminders WHERE status = 'pending' AND due_date BETWEEN ? AND ? AND deleted_at IS NULL",
         [firstDayMonth, lastDayMonth]
       );
 
+      // Receita: sessões pagas + cobranças pagas
       const sIncome: any = await querySQL(
-        "SELECT SUM(payment_value) as total FROM sessions WHERE payment_status = 'paid' AND start_time BETWEEN ? AND ? AND deleted_at IS NULL",
+        "SELECT SUM(payment_value) as total FROM sessions WHERE payment_status = 'paid' AND start_time BETWEEN ? AND ? AND deleted_at IS NULL AND (type IS NULL OR type = 'session')",
+        [firstDayMonth, lastDayMonth]
+      );
+      const bIncome: any = await querySQL(
+        "SELECT SUM(amount) as total FROM billing_reminders WHERE status = 'paid' AND due_date BETWEEN ? AND ? AND deleted_at IS NULL",
         [firstDayMonth, lastDayMonth]
       );
 
       setStats({
         activePatients: pActive[0]?.count || 0,
         sessionsToday: sToday.length || 0,
-        pendingPayments: sPending[0]?.total || 0,
-        monthlyIncome: sIncome[0]?.total || 0
+        pendingPayments: (sPending[0]?.total || 0) + (bPending[0]?.total || 0),
+        monthlyIncome: (sIncome[0]?.total || 0) + (bIncome[0]?.total || 0)
       });
       setNextSessions(sToday || []);
     } catch (err) {

@@ -57,6 +57,13 @@ export const initDB = async () => {
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP, deleted_at DATETIME,
             FOREIGN KEY(patient_id) REFERENCES patients(id)
         );
+        CREATE TABLE IF NOT EXISTS billing_reminders (
+            id TEXT PRIMARY KEY, patient_id TEXT NOT NULL, due_date TEXT NOT NULL,
+            amount REAL DEFAULT 0, status TEXT DEFAULT 'pending', payment_method TEXT,
+            notes TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            paid_at DATETIME, deleted_at DATETIME,
+            FOREIGN KEY(patient_id) REFERENCES patients(id)
+        );
       `);
       await syncWebDB();
     }

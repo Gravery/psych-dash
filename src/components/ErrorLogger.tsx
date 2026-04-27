@@ -54,7 +54,8 @@ const ErrorLogger: React.FC = () => {
       display: 'flex',
       flexDirection: 'column',
       borderTop: '4px solid var(--accent-primary)',
-      fontFamily: 'monospace'
+      fontFamily: 'monospace',
+      pointerEvents: isVisible ? 'auto' : 'none'
     }}>
       <div
         onClick={() => setIsVisible(!isVisible)}

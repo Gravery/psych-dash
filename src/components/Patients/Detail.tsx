@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Save, FileText, Plus, Clock, History, File, Download, Upload, DollarSign, Calendar as CalendarIcon, Repeat, Trash2 } from 'lucide-react';
+import { ArrowLeft, Save, FileText, Plus, Clock, History, File, Download, Upload, DollarSign, Calendar as CalendarIcon, Repeat, Trash2, Smartphone, X } from 'lucide-react';
 import { querySQL, execSQL } from '../../db/db';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -45,6 +45,8 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [showMobileUpload, setShowMobileUpload] = useState(false);
+  const [lanInfo, setLanInfo] = useState<{ ip: string; port: number; url: string; qrCode: string } | null>(null);
   const [newSession, setNewSession] = useState({
     date: new Date().toISOString().split('T')[0],
     time: '09:00',
@@ -57,7 +59,10 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
     cpf: '',
     phone: '',
     email: '',
-    address: ''
+    address: '',
+    payer_name: '',
+    billing_cycle: 'per_session',
+    billing_day: ''
   });
 
   const fetchData = async () => {
@@ -72,7 +77,10 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
           cpf: formatCPF(pResult[0].cpf || ''),
           phone: formatPhone(pResult[0].phone || ''),
           email: pResult[0].email || '',
-          address: pResult[0].address || ''
+          address: pResult[0].address || '',
+          payer_name: pResult[0].payer_name || '',
+          billing_cycle: pResult[0].billing_cycle || 'per_session',
+          billing_day: pResult[0].billing_day || ''
         });
       }
 
@@ -82,7 +90,7 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
       const rResult: any = await querySQL('SELECT * FROM medical_records WHERE patient_id = ? AND deleted_at IS NULL ORDER BY created_at DESC', [id]);
       setMedicalRecords(rResult || []);
 
-      const sResult: any = await querySQL('SELECT * FROM sessions WHERE patient_id = ? AND deleted_at IS NULL ORDER BY start_time DESC', [id]);
+      const sResult: any = await querySQL("SELECT * FROM sessions WHERE patient_id = ? AND deleted_at IS NULL AND (type IS NULL OR type = 'session') ORDER BY start_time DESC", [id]);
       setSessions(sResult || []);
 
     } catch (err) {
@@ -90,9 +98,50 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
     }
   };
 
+  // Versão leve: atualiza apenas listas (sessões, documentos, prontuário)
+  // Nunca toca em patient, anamnesis ou editForm para não interferir na digitação
+  const isRefreshing = React.useRef(false);
+
+  const refreshLists = async () => {
+    if (!id || isRefreshing.current) return;
+    isRefreshing.current = true;
+    try {
+      const [dResult, rResult, sResult] = await Promise.all([
+        querySQL('SELECT * FROM documents WHERE patient_id = ? AND deleted_at IS NULL ORDER BY created_at DESC', [id]),
+        querySQL('SELECT * FROM medical_records WHERE patient_id = ? AND deleted_at IS NULL ORDER BY created_at DESC', [id]),
+        querySQL("SELECT * FROM sessions WHERE patient_id = ? AND deleted_at IS NULL AND (type IS NULL OR type = 'session') ORDER BY start_time DESC", [id])
+      ]);
+
+      setDocuments(dResult || []);
+      setMedicalRecords(rResult || []);
+      setSessions(sResult || []);
+    } catch (err) {
+      console.error('Error refreshing lists:', err);
+    } finally {
+      isRefreshing.current = false;
+    }
+  };
+
   useEffect(() => {
     fetchData();
+
+    let unsub: (() => void) | null = null;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+    if ((window as any).electronAPI?.onRefreshData) {
+      unsub = (window as any).electronAPI.onRefreshData((data: any) => {
+        if (!data || data.patientId === id) {
+          if (debounceTimer) clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => refreshLists(), 300);
+        }
+      });
+    }
+    return () => {
+      if (unsub) unsub();
+      if (debounceTimer) clearTimeout(debounceTimer);
+    };
   }, [id]);
+
 
   useEffect(() => {
     if (toast) {
@@ -104,16 +153,18 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
   const handleAddRecord = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newRecord.trim() || !id) return;
-
+    setIsSaving(true);
     try {
       await execSQL(
         'INSERT INTO medical_records (id, patient_id, content) VALUES (?, ?, ?)',
         [crypto.randomUUID(), id, newRecord]
       );
       setNewRecord('');
-      fetchData();
+      refreshLists();
     } catch (err) {
       console.error('Error adding medical record:', err);
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -159,9 +210,12 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
     setIsSaving(true);
     try {
       await execSQL(
-        'UPDATE patients SET name = ?, cpf = ?, phone = ?, email = ?, address = ?, anamnesis = ? WHERE id = ?',
-        [editForm.name, editForm.cpf.replace(/\D/g, ''), editForm.phone.replace(/\D/g, ''), editForm.email, editForm.address, anamnesis, id]
+        'UPDATE patients SET name = ?, cpf = ?, phone = ?, email = ?, address = ?, anamnesis = ?, payer_name = ?, billing_cycle = ?, billing_day = ? WHERE id = ?',
+        [editForm.name, editForm.cpf.replace(/\D/g, ''), editForm.phone.replace(/\D/g, ''), editForm.email, editForm.address, anamnesis, editForm.payer_name, editForm.billing_cycle, editForm.billing_day || null, id]
       );
+
+      await (window as any).electronAPI.syncBillingReminders({ patientId: id });
+
       await fetchData();
       setToast({ message: 'Dados atualizados com sucesso!', type: 'success' });
     } catch (err) {
@@ -174,10 +228,17 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
 
   const handleFileUpload = async (category: string = 'general') => {
     if (!id) return;
-    const res = await (window as any).electronAPI.file.upload(id, category);
-    if (res.success) {
-      fetchData();
-      setToast({ message: 'Documento anexado!', type: 'success' });
+    setIsSaving(true);
+    try {
+      const res = await (window as any).electronAPI.file.upload(id, category);
+      if (res.success) {
+        refreshLists();
+        setToast({ message: 'Documento anexado!', type: 'success' });
+      }
+    } catch (err) {
+      console.error('Error uploading file:', err);
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -187,7 +248,7 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
 
   const handleFileDelete = async (id: string, name: string) => {
     if (!window.confirm(`Tem certeza que deseja excluir o arquivo "${name}"?`)) return;
-    
+
     const api = (window as any).electronAPI;
     if (!api?.file?.delete) {
       console.error('API de exclusão não encontrada. Reinicie o aplicativo.');
@@ -197,10 +258,18 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
 
     const res = await api.file.delete(id);
     if (res.success) {
-      fetchData();
+      refreshLists();
       setToast({ message: 'Arquivo excluído!', type: 'success' });
     } else {
       setToast({ message: 'Erro ao excluir arquivo.', type: 'error' });
+    }
+  };
+
+  const handleOpenMobileUpload = async (category: string = 'general') => {
+    if ((window as any).electronAPI?.getLanInfo) {
+      const info = await (window as any).electronAPI.getLanInfo({ patientId: id, category });
+      setLanInfo(info);
+      setShowMobileUpload(true);
     }
   };
 
@@ -220,6 +289,7 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
 
   const handleAddSessionFromDetail = async (e: React.FormEvent) => {
     e.preventDefault();
+    setIsSaving(true);
     const startDateTime = `${newSession.date}T${newSession.time}:00`;
     const value = parseFloat(newSession.payment_value) || patient?.session_value || 0;
     const recurringId = newSession.recurrence !== 'none' ? crypto.randomUUID() : null;
@@ -243,9 +313,11 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
       }
 
       setShowAddModal(false);
-      fetchData();
+      refreshLists();
     } catch (err) {
       console.error('Error adding session:', err);
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -309,6 +381,52 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
         </div>
       )}
 
+      {showMobileUpload && (
+        <div style={{
+          position: 'fixed',
+          top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.5)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 1000,
+          backdropFilter: 'blur(4px)'
+        }}>
+          <div className="card glass" style={{ width: '400px', padding: '32px', textAlign: 'center', position: 'relative' }}>
+            <button
+              onClick={() => setShowMobileUpload(false)}
+              style={{ position: 'absolute', top: '16px', right: '16px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}
+            >
+              <X size={24} />
+            </button>
+            <Smartphone size={48} color="var(--accent-primary)" style={{ marginBottom: '16px' }} />
+            <h3 style={{ fontWeight: 'bold', marginBottom: '8px' }}>Receber do Celular</h3>
+            <p style={{ fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '24px' }}>
+              Aponte a câmera do seu celular para o código abaixo para enviar arquivos via Wi-Fi.
+            </p>
+
+            <div style={{ backgroundColor: 'white', padding: '16px', borderRadius: '12px', display: 'inline-block', marginBottom: '16px' }}>
+              {lanInfo?.qrCode ? (
+                <img
+                  src={lanInfo.qrCode}
+                  alt="QR Code"
+                  style={{ width: '200px', height: '200px' }}
+                />
+              ) : (
+                <div style={{ width: '200px', height: '200px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  Gerando...
+                </div>
+              )}
+            </div>
+
+            <p style={{ fontSize: '12px', color: 'var(--text-secondary)', wordBreak: 'break-all' }}>
+              {lanInfo?.url}
+            </p>
+            <div style={{ marginTop: '20px', padding: '12px', backgroundColor: 'rgba(14, 165, 233, 0.1)', borderRadius: '8px', fontSize: '12px' }}>
+              Certifique-se que o celular está no mesmo Wi-Fi que este computador.
+            </div>
+          </div>
+        </div>
+      )}
+
       <button onClick={onBack} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px' }}>
         <ArrowLeft size={18} /> Voltar para lista
       </button>
@@ -365,7 +483,15 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
                   placeholder="Escreva as anotações profundas da última sessão..."
                   style={{ width: '100%', minHeight: '150px', marginBottom: '16px' }}
                 />
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button type="button" onClick={() => handleOpenMobileUpload('timeline')} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', border: '1px solid var(--border-color)', color: 'var(--accent-primary)' }}>
+                      <Smartphone size={14} /> Receber do Celular
+                    </button>
+                    <button type="button" onClick={() => handleFileUpload('timeline')} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', border: '1px solid var(--border-color)' }}>
+                      <Upload size={14} /> Anexar Arquivo
+                    </button>
+                  </div>
                   <button type="submit" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <Save size={18} /> Salvar no Prontuário
                   </button>
@@ -376,17 +502,38 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
               {[
                 ...medicalRecords.map(r => ({ ...r, type: 'manual' })),
-                ...sessions.filter(s => s.notes && s.notes.trim()).map(s => ({ ...s, type: 'session', content: s.notes, created_at: s.start_time }))
+                ...sessions.filter(s => s.notes && s.notes.trim() && s.type !== 'billing').map(s => ({ ...s, type: 'session', content: s.notes, created_at: s.start_time })),
+                ...documents.filter(d => d.category === 'timeline').map(d => ({ ...d, type: 'file', content: d.name, created_at: d.created_at, path: d.path }))
               ].sort((a, b) => b.created_at.localeCompare(a.created_at)).map(record => (
-                <div key={record.id} className="card glass" style={{ borderLeft: `4px solid ${record.type === 'session' ? 'var(--accent-primary)' : 'var(--success)'}` }}>
+                <div key={record.id} className="card glass" style={{ borderLeft: `4px solid ${record.type === 'session' ? 'var(--accent-primary)' : record.type === 'file' ? '#3b82f6' : 'var(--success)'}` }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px', color: 'var(--text-secondary)', fontSize: '13px' }}>
                     <span style={{ fontWeight: '600', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      {record.type === 'session' ? <Clock size={16} color="#38bdf8" strokeWidth={2.5} style={{ stroke: '#38bdf8' }} /> : <FileText size={16} color="#38bdf8" strokeWidth={2.5} style={{ stroke: '#38bdf8' }} />}
-                      {record.type === 'session' ? 'Evolução de Sessão' : 'Anotação Manual'}
+                      {record.type === 'session' ? <Clock size={16} color="#38bdf8" /> : record.type === 'file' ? <File size={16} color="#3b82f6" /> : <FileText size={16} color="#38bdf8" />}
+                      {record.type === 'session' ? 'Evolução de Sessão' : record.type === 'file' ? 'Arquivo Anexado' : 'Anotação Manual'}
                     </span>
                     <span>{new Date(record.created_at).toLocaleString('pt-BR')}</span>
                   </div>
-                  <p style={{ whiteSpace: 'pre-wrap', lineHeight: '1.6' }}>{record.content}</p>
+                  {record.type === 'file' ? (
+                    <div
+                      onClick={() => handleFileOpen(record.path)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '12px',
+                        padding: '12px',
+                        backgroundColor: 'rgba(59, 130, 246, 0.05)',
+                        borderRadius: '8px',
+                        border: '1px solid rgba(59, 130, 246, 0.2)',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <File size={20} color="#3b82f6" />
+                      <span style={{ fontWeight: '600', fontSize: '14px' }}>{record.content}</span>
+                      <span style={{ fontSize: '11px', color: 'var(--text-secondary)', marginLeft: 'auto' }}>Clique para abrir</span>
+                    </div>
+                  ) : (
+                    <p style={{ whiteSpace: 'pre-wrap', lineHeight: '1.6' }}>{record.content}</p>
+                  )}
                 </div>
               ))}
             </div>
@@ -522,6 +669,51 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
                 style={{ width: '100%', minHeight: '80px' }}
               />
             </div>
+
+            <h4 style={{ fontSize: '14px', fontWeight: 'bold', margin: '24px 0 16px', color: 'var(--accent-primary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Faturamento e Cobrança</h4>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '32px' }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: '6px' }}>Responsável pelo Pagamento</label>
+                <input
+                  type="text"
+                  value={editForm.payer_name}
+                  onChange={e => setEditForm({ ...editForm, payer_name: e.target.value })}
+                  placeholder="Nome do responsável (ex: Pai/Mãe)"
+                  style={{ width: '100%' }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', marginBottom: '6px' }}>Ciclo de Cobrança</label>
+                <select
+                  value={editForm.billing_cycle}
+                  onChange={e => setEditForm({ ...editForm, billing_cycle: e.target.value })}
+                  style={{ width: '100%' }}
+                >
+                  <option value="per_session">Por Sessão (Acerto Imediato)</option>
+                  <option value="monthly">Mensal (Acerto no Fim do Mês)</option>
+                </select>
+              </div>
+            </div>
+
+            {editForm.billing_cycle === 'monthly' && (
+              <div style={{ marginBottom: '32px' }}>
+                <label style={{ display: 'block', marginBottom: '6px' }}>Dia do Acerto Mensal (1-31)</label>
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                  <input
+                    type="number"
+                    min="1"
+                    max="31"
+                    value={editForm.billing_day}
+                    onChange={e => setEditForm({ ...editForm, billing_day: e.target.value })}
+                    placeholder="Ex: 5"
+                    style={{ width: '100px' }}
+                  />
+                  <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                    O sistema criará automaticamente lembretes recorrentes no calendário para este dia.
+                  </span>
+                </div>
+              </div>
+            )}
             <button type="submit" className="btn-primary" disabled={isSaving} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Save size={18} /> {isSaving ? 'Salvando...' : 'Salvar Alterações'}
             </button>
@@ -550,24 +742,29 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
                 <h4 style={{ fontWeight: 'bold', fontSize: '15px' }}>Anexos da Anamnese</h4>
                 <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Testes, desenhos, fotos ou relatórios iniciais específicos do paciente.</p>
               </div>
-              <button onClick={() => handleFileUpload('anamnesis')} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', border: '1px solid var(--border-color)' }}>
-                <Upload size={14} /> Anexar Arquivo
-              </button>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button onClick={() => handleOpenMobileUpload('anamnesis')} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', border: '1px solid var(--border-color)', color: 'var(--accent-primary)' }}>
+                  <Smartphone size={14} /> Receber do Celular
+                </button>
+                <button onClick={() => handleFileUpload('anamnesis')} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', border: '1px solid var(--border-color)' }}>
+                  <Upload size={14} /> Anexar Arquivo
+                </button>
+              </div>
             </header>
-            
+
             {anamnesisDocs.length > 0 ? (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '16px' }}>
                 {anamnesisDocs.map(doc => (
-                  <div 
-                    key={doc.id} 
+                  <div
+                    key={doc.id}
                     onClick={() => handleFileOpen(doc.path)}
-                    className="card" 
-                    style={{ 
-                      padding: '12px', 
-                      display: 'flex', 
-                      alignItems: 'center', 
-                      gap: '12px', 
-                      backgroundColor: 'var(--bg-secondary)', 
+                    className="card"
+                    style={{
+                      padding: '12px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                      backgroundColor: 'var(--bg-secondary)',
                       border: '1px solid var(--border-color)',
                       cursor: 'pointer',
                       transition: 'background-color 0.2s',
@@ -582,13 +779,13 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
                     <div style={{ overflow: 'hidden', flex: 1 }}>
                       <p style={{ fontSize: '12px', fontWeight: '600', marginBottom: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.name}</p>
                     </div>
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); handleFileDelete(doc.id, doc.name); }} 
-                      style={{ 
-                        padding: '6px', 
-                        color: 'var(--error)', 
-                        background: 'none', 
-                        border: 'none', 
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleFileDelete(doc.id, doc.name); }}
+                      style={{
+                        padding: '6px',
+                        color: 'var(--error)',
+                        background: 'none',
+                        border: 'none',
                         cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center'
@@ -623,25 +820,30 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
               <h3 style={{ fontWeight: 'bold' }}>Documentos e Anexos</h3>
               <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Contratos, exames e avaliações externas.</p>
             </div>
-            <button onClick={() => handleFileUpload('general')} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Upload size={18} /> Anexar Documento
-            </button>
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button onClick={() => handleOpenMobileUpload('general')} className="btn-ghost" style={{ display: 'flex', alignItems: 'center', gap: '8px', border: '1px solid var(--border-color)' }}>
+                <Smartphone size={18} /> Receber do Celular
+              </button>
+              <button onClick={() => handleFileUpload('general')} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Upload size={18} /> Anexar Documento
+              </button>
+            </div>
           </header>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '20px' }}>
             {generalDocs.map(doc => (
-              <div 
-                key={doc.id} 
+              <div
+                key={doc.id}
                 onClick={() => handleFileOpen(doc.path)}
-                className="card" 
-                style={{ 
-                  padding: '16px', 
-                  display: 'flex', 
-                  flexDirection: 'column', 
-                  gap: '12px', 
-                  alignItems: 'center', 
-                  textAlign: 'center', 
-                  backgroundColor: 'var(--bg-secondary)', 
+                className="card"
+                style={{
+                  padding: '16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '12px',
+                  alignItems: 'center',
+                  textAlign: 'center',
+                  backgroundColor: 'var(--bg-secondary)',
                   border: '1px solid var(--border-color)',
                   cursor: 'pointer',
                   transition: 'all 0.2s',
@@ -656,7 +858,7 @@ const PatientDetail: React.FC<PatientDetailProps> = ({ id, onBack }) => {
                   e.currentTarget.style.borderColor = 'var(--border-color)';
                 }}
               >
-                <button 
+                <button
                   onClick={(e) => { e.stopPropagation(); handleFileDelete(doc.id, doc.name); }}
                   style={{
                     position: 'absolute',

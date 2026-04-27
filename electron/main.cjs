@@ -48,7 +48,7 @@ function createTray() {
     const iconPath = path.join(__dirname, '../public/favicon.svg');
     // Em Windows, SVGs podem falhar no Tray. Tentamos carregar de forma segura.
     let trayIcon = nativeImage.createFromPath(iconPath);
-    
+
     if (trayIcon.isEmpty()) {
       console.warn('Main: Ícone não carregado, usando fallback de texto.');
       // Se falhar, criamos sem ícone ou com um ícone vazio se possível
@@ -58,18 +58,24 @@ function createTray() {
 
     tray = new Tray(iconPath);
     const contextMenu = Menu.buildFromTemplate([
-      { label: 'Abrir PsychDash', click: () => {
-        if (!mainWin) createWindow();
-        else mainWin.show();
-      }},
-      { label: 'Modo Navegador', click: () => {
-        shell.openExternal('http://localhost:5173');
-      }},
+      {
+        label: 'Abrir PsychDash', click: () => {
+          if (!mainWin) createWindow();
+          else mainWin.show();
+        }
+      },
+      {
+        label: 'Modo Navegador', click: () => {
+          shell.openExternal('http://localhost:5173');
+        }
+      },
       { type: 'separator' },
-      { label: 'Sair', click: () => {
-        app.isQuitting = true;
-        app.quit();
-      }}
+      {
+        label: 'Sair', click: () => {
+          app.isQuitting = true;
+          app.quit();
+        }
+      }
     ]);
     tray.setToolTip('PsychDash Server');
     tray.setContextMenu(contextMenu);
@@ -112,7 +118,7 @@ function createTray() {
   try {
     const iconPath = path.join(__dirname, '../public/favicon.svg');
     let trayIcon;
-    
+
     try {
       trayIcon = nativeImage.createFromPath(iconPath);
       if (trayIcon.isEmpty()) throw new Error('Empty icon');
@@ -124,18 +130,24 @@ function createTray() {
 
     tray = new Tray(trayIcon);
     const contextMenu = Menu.buildFromTemplate([
-      { label: 'Abrir PsychDash', click: () => {
-        if (!mainWin) createWindow();
-        else mainWin.show();
-      }},
-      { label: 'Modo Navegador', click: () => {
-        shell.openExternal('http://localhost:5173');
-      }},
+      {
+        label: 'Abrir PsychDash', click: () => {
+          if (!mainWin) createWindow();
+          else mainWin.show();
+        }
+      },
+      {
+        label: 'Modo Navegador', click: () => {
+          shell.openExternal('http://localhost:5173');
+        }
+      },
       { type: 'separator' },
-      { label: 'Sair', click: () => {
-        app.isQuitting = true;
-        app.quit();
-      }}
+      {
+        label: 'Sair', click: () => {
+          app.isQuitting = true;
+          app.quit();
+        }
+      }
     ]);
     tray.setToolTip('PsychDash Server');
     tray.setContextMenu(contextMenu);
@@ -165,3 +177,9 @@ app.on('window-all-closed', () => {
 });
 
 process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true';
+
+app.on('refresh-patient-data', (data) => {
+  if (mainWin && !mainWin.isDestroyed()) {
+    mainWin.webContents.send('refresh-data', data);
+  }
+});

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Palette, Monitor, Bell, Volume2, Save, Info, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Palette, Monitor, Bell, Volume2, Save, Info, AlertTriangle, CheckCircle2, Database, Download, Upload } from 'lucide-react';
 import { execSQL, querySQL } from '../../db/db';
 import bellSound from '../../assets/sounds/bell.wav';
 import digitalSound from '../../assets/sounds/digital.wav';
@@ -252,6 +252,61 @@ const SettingsPage: React.FC = () => {
             </div>
             <div style={{ fontSize: '13px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Info size={16} /> Você receberá um alerta visual e sonoro antes de cada sessão agendada.
+            </div>
+          </div>
+        </section>
+
+        {/* Seção de Banco de Dados */}
+        <section className="card glass">
+          <h2 style={{ fontSize: '18px', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--text-primary)' }}>
+            <Database size={20} /> Banco de Dados & Backups
+          </h2>
+          <div style={{ display: 'grid', gap: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <label style={{ fontWeight: '600', display: 'block' }}>Exportar Backup</label>
+                <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Salve uma cópia de segurança completa dos seus pacientes e atendimentos.</p>
+              </div>
+              <button 
+                onClick={async () => {
+                  if ((window as any).electronAPI) {
+                    const res = await (window as any).electronAPI.db.export();
+                    if (res.success) {
+                      setMessage({ type: 'success', text: `Cópia de segurança criada com sucesso!` });
+                    }
+                  }
+                }} 
+                className="btn-ghost" 
+                style={{ display: 'flex', alignItems: 'center', gap: '8px', border: '1px solid var(--border-color)' }}
+              >
+                <Download size={18} /> Exportar .sqlite3
+              </button>
+            </div>
+            
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '16px', borderTop: '1px solid var(--border-color)' }}>
+              <div>
+                <label style={{ fontWeight: '600', display: 'block', color: 'var(--error)' }}>Importar Dados</label>
+                <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Substitui todos os dados atuais. Um backup automático do banco atual será criado.</p>
+              </div>
+              <button 
+                onClick={async () => {
+                  if (!window.confirm('ATENÇÃO: Importar um novo banco de dados substituirá TODOS os seus dados atuais. Um backup automático do seu banco atual será criado na pasta do aplicativo. Deseja continuar?')) return;
+                  
+                  if ((window as any).electronAPI) {
+                    const res = await (window as any).electronAPI.db.import();
+                    if (res.success) {
+                      setMessage({ type: 'success', text: 'Banco de dados importado! Reiniciando aplicativo...' });
+                      setTimeout(() => window.location.reload(), 2000);
+                    } else if (res.error) {
+                      setMessage({ type: 'error', text: `Erro na importação: ${res.error}` });
+                    }
+                  }
+                }} 
+                className="btn-ghost" 
+                style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--error)', border: '1px solid var(--error)' }}
+              >
+                <Upload size={18} /> Importar Arquivo
+              </button>
             </div>
           </div>
         </section>

@@ -26,11 +26,29 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ session, onClose, onUpdat
   const [editedSession, setEditedSession] = useState({ ...session });
   const [displayPrice, setDisplayPrice] = useState(session.payment_value?.toString() || '');
   const [isSaving, setIsSaving] = useState(false);
+  const notesRef = React.useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (notesRef.current) {
+      notesRef.current.focus();
+    }
+  }, []);
+  const [patientBilling, setPatientBilling] = useState<{ payer_name: string; billing_cycle: string } | null>(null);
+
+  useEffect(() => {
+    const fetchBilling = async () => {
+      const result: any = await querySQL('SELECT payer_name, billing_cycle FROM patients WHERE id = ?', [session.patient_id]);
+      if (result && result[0]) {
+        setPatientBilling(result[0]);
+      }
+    };
+    fetchBilling();
+  }, [session.patient_id]);
 
   useEffect(() => {
     setEditedSession({ ...session });
     setDisplayPrice(session.payment_value?.toString() || '');
-  }, [session]);
+  }, [session.id]);
 
   const handleSave = async () => {
     setIsSaving(true);
@@ -92,13 +110,15 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ session, onClose, onUpdat
     );
   };
 
-  const handleDelete = async (deleteAll: boolean = false) => {
-    if (!window.confirm(deleteAll ? 'Excluir toda a série de sessões?' : 'Excluir esta sessão?')) return;
+  const [showConfirmDelete, setShowConfirmDelete] = useState<{ isSeries: boolean } | null>(null);
 
+  const handleDelete = async (isSeries: boolean) => {
+    setShowConfirmDelete(null);
+    setIsSaving(true);
     try {
-      if (deleteAll && session.recurring_id) {
-        await execSQL(`
-            UPDATE sessions 
+      if (isSeries) {
+        await execSQL(
+          `UPDATE sessions 
             SET deleted_at = CURRENT_TIMESTAMP 
             WHERE (recurring_id = ? OR id = ?) 
             AND status = 'scheduled' 
@@ -112,12 +132,38 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ session, onClose, onUpdat
       onClose();
     } catch (err) {
       console.error('Error deleting session:', err);
+    } finally {
+      setIsSaving(false);
     }
   };
 
   return (
     <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: '20px' }}>
-      <div className="card glass" style={{ width: '100%', maxWidth: '550px', maxHeight: '90vh', overflowY: 'auto' }}>
+      <div className="card glass" style={{ width: '100%', maxWidth: '550px', maxHeight: '90vh', overflowY: 'auto', position: 'relative' }}>
+        {showConfirmDelete && (
+          <div style={{ 
+            position: 'absolute', inset: 0, backgroundColor: 'var(--bg-secondary)', 
+            zIndex: 1200, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexDirection: 'column', padding: '24px', textAlign: 'center', borderRadius: '16px',
+            border: '1px solid var(--border-color)'
+          }}>
+            <div style={{ padding: '16px', backgroundColor: 'rgba(239, 68, 68, 0.1)', borderRadius: '50%', marginBottom: '16px' }}>
+              <Trash2 size={32} color="var(--error)" />
+            </div>
+            <h3 style={{ fontWeight: 'bold', fontSize: '18px', marginBottom: '8px' }}>
+              {showConfirmDelete.isSeries ? 'Excluir Série?' : 'Excluir Sessão?'}
+            </h3>
+            <p style={{ fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '24px' }}>
+              {showConfirmDelete.isSeries 
+                ? 'Todos os agendamentos futuros desta série serão excluídos.' 
+                : 'Esta ação não pode ser desfeita.'}
+            </p>
+            <div style={{ display: 'flex', gap: '12px', width: '100%', maxWidth: '300px' }}>
+              <button onClick={() => setShowConfirmDelete(null)} className="btn-ghost" style={{ flex: 1, border: '1px solid var(--border-color)' }}>Voltar</button>
+              <button onClick={() => handleDelete(showConfirmDelete.isSeries)} className="btn-primary" style={{ flex: 1, backgroundColor: 'var(--error)', border: '1px solid rgba(0,0,0,0.1)' }}>Confirmar</button>
+            </div>
+          </div>
+        )}
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <div style={{ width: '40px', height: '40px', borderRadius: '12px', backgroundColor: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white' }}>
@@ -163,6 +209,42 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ session, onClose, onUpdat
             </select>
           </div>
         </div>
+
+        {patientBilling && (patientBilling.payer_name || patientBilling.billing_cycle === 'monthly') && (
+          <div className="card" style={{ 
+            padding: '12px 16px', 
+            backgroundColor: 'rgba(14, 165, 233, 0.05)', 
+            border: '1px solid rgba(14, 165, 233, 0.2)', 
+            marginBottom: '24px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px'
+          }}>
+            <DollarSign size={20} color="var(--accent-primary)" />
+            <div style={{ flex: 1 }}>
+              <p style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--accent-primary)', marginBottom: '2px' }}>
+                LEMBRETE DE FATURAMENTO
+              </p>
+              <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                {patientBilling.payer_name ? `Pagador: ${patientBilling.payer_name}` : 'Pagador: Próprio Paciente'} 
+                {patientBilling.billing_cycle === 'monthly' ? ' • Acerto Mensal (Fim do Mês)' : ' • Acerto por Sessão'}
+              </p>
+            </div>
+            {patientBilling.billing_cycle === 'monthly' && session.payment_status !== 'paid' && (
+              <span style={{ 
+                padding: '4px 8px', 
+                borderRadius: '6px', 
+                fontSize: '10px', 
+                backgroundColor: 'rgba(245, 158, 11, 0.1)', 
+                color: '#f59e0b',
+                fontWeight: 'bold',
+                textTransform: 'uppercase'
+              }}>
+                Pendente p/ Mensal
+              </span>
+            )}
+          </div>
+        )}
 
         <div style={{ marginBottom: '20px' }}>
           <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500' }}>
@@ -217,6 +299,7 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ session, onClose, onUpdat
         <div style={{ marginBottom: '24px' }}>
           <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500' }}>Observações Rápidas (Sessão)</label>
           <textarea
+            ref={notesRef}
             value={editedSession.notes || ''}
             onChange={e => setEditedSession({ ...editedSession, notes: e.target.value })}
             placeholder="Ex: Teve atraso, falou sobre tal tema..."
@@ -226,11 +309,11 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ session, onClose, onUpdat
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ display: 'flex', gap: '12px' }}>
-            <button onClick={() => handleDelete(false)} className="btn-ghost" style={{ color: 'var(--error)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <button onClick={() => setShowConfirmDelete({ isSeries: false })} className="btn-ghost" disabled={isSaving} style={{ color: 'var(--error)', display: 'flex', alignItems: 'center', gap: '6px' }}>
               <Trash2 size={16} /> Excluir
             </button>
             {session.recurring_id && (
-              <button onClick={() => handleDelete(true)} className="btn-ghost" style={{ color: 'var(--error)', fontSize: '12px' }}>
+              <button onClick={() => setShowConfirmDelete({ isSeries: true })} className="btn-ghost" disabled={isSaving} style={{ color: 'var(--error)', fontSize: '12px' }}>
                 Excluir Série
               </button>
             )}
