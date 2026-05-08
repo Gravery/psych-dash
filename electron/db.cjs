@@ -107,9 +107,10 @@ function initDatabase() {
   try { db.exec("ALTER TABLE patients ADD COLUMN billing_day INTEGER"); } catch (e) { }
 
   try { db.exec("ALTER TABLE sessions ADD COLUMN type TEXT DEFAULT 'session'"); } catch (e) { }
+  try { db.exec("ALTER TABLE sessions ADD COLUMN recurrence_period TEXT"); } catch (e) { }
 
-  // Migra lembretes antigos da tabela sessions para billing_reminders
   migrateBillingToNewTable();
+  syncRecurringSessions();
   syncBillingReminders();
   startLocalServer();
 }
@@ -492,21 +493,23 @@ function syncBillingReminders(patientId = null) {
           "SELECT id FROM billing_reminders WHERE patient_id = ? AND due_date LIKE ? AND deleted_at IS NULL"
         ).get(p.id, searchPrefix + '%');
 
+        const monthStart = new Date(firstOfTarget.getFullYear(), firstOfTarget.getMonth(), 1).toISOString();
+        const monthEnd = new Date(firstOfTarget.getFullYear(), firstOfTarget.getMonth() + 1, 0, 23, 59, 59).toISOString();
+        const sessionsInMonth = db.prepare(
+          "SELECT SUM(payment_value) as total, COUNT(*) as count FROM sessions WHERE patient_id = ? AND start_time BETWEEN ? AND ? AND deleted_at IS NULL AND (type IS NULL OR type = 'session')"
+        ).get(p.id, monthStart, monthEnd);
+
+        const amount = sessionsInMonth?.total || 0;
+        const notes = `Acerto Mensal - ${sessionsInMonth?.count || 0} sessão(ões)`;
+
         if (!existing) {
-          const monthStart = new Date(firstOfTarget.getFullYear(), firstOfTarget.getMonth(), 1).toISOString();
-          const monthEnd = new Date(firstOfTarget.getFullYear(), firstOfTarget.getMonth() + 1, 0, 23, 59, 59).toISOString();
-          const sessionsInMonth = db.prepare(
-            "SELECT SUM(payment_value) as total, COUNT(*) as count FROM sessions WHERE patient_id = ? AND start_time BETWEEN ? AND ? AND deleted_at IS NULL AND (type IS NULL OR type = 'session')"
-          ).get(p.id, monthStart, monthEnd);
-
-          const amount = sessionsInMonth?.total || 0;
-
           db.prepare(
             "INSERT INTO billing_reminders (id, patient_id, due_date, amount, status, notes) VALUES (?, ?, ?, ?, ?, ?)"
-          ).run(
-            crypto.randomUUID(), p.id, isoStr, amount, 'pending',
-            `Acerto Mensal - ${sessionsInMonth?.count || 0} sessão(ões)`
-          );
+          ).run(crypto.randomUUID(), p.id, isoStr, amount, 'pending', notes);
+        } else {
+          db.prepare(
+            "UPDATE billing_reminders SET amount = ?, notes = ? WHERE id = ? AND status = 'pending'"
+          ).run(amount, notes, existing.id);
         }
       }
     }
@@ -576,6 +579,85 @@ ipcMain.handle('revert-billing', async (event, { billingId }) => {
     console.error('[Billing] Erro ao reverter:', err);
     return { success: false, error: err.message };
   }
+});
+
+function syncRecurringSessions() {
+  console.log('[Sync] Sincronizando sessões recorrentes...');
+  try {
+    const endOfNextMonth = new Date();
+    endOfNextMonth.setMonth(endOfNextMonth.getMonth() + 2);
+    endOfNextMonth.setDate(0);
+    endOfNextMonth.setHours(23, 59, 59, 999);
+
+    const recurringSeries = db.prepare(`
+      SELECT DISTINCT recurring_id, recurrence_period, patient_id, payment_value, notes
+      FROM sessions
+      WHERE recurring_id IS NOT NULL 
+      AND recurrence_period IS NOT NULL
+      AND deleted_at IS NULL
+    `).all();
+
+    for (const series of recurringSeries) {
+      let lastSession = db.prepare(`
+        SELECT start_time 
+        FROM sessions 
+        WHERE recurring_id = ? 
+        ORDER BY start_time DESC 
+        LIMIT 1
+      `).get(series.recurring_id);
+
+      if (!lastSession) continue;
+
+      let nextStartTime = new Date(lastSession.start_time);
+
+      while (nextStartTime < endOfNextMonth) {
+        if (series.recurrence_period === 'weekly') {
+          nextStartTime.setDate(nextStartTime.getDate() + 7);
+        } else if (series.recurrence_period === 'biweekly') {
+          nextStartTime.setDate(nextStartTime.getDate() + 14);
+        } else if (series.recurrence_period === 'monthly') {
+          nextStartTime.setMonth(nextStartTime.getMonth() + 1);
+        } else {
+          break;
+        }
+
+        if (nextStartTime > endOfNextMonth) break;
+
+        const isoStr = nextStartTime.toISOString();
+        // Aqui verificamos se já existe (não deletada) antes de inserir
+        const exists = db.prepare(`
+          SELECT id FROM sessions 
+          WHERE recurring_id = ? 
+          AND start_time = ?
+        `).get(series.recurring_id, isoStr);
+
+        if (!exists) {
+          db.prepare(`
+            INSERT INTO sessions (id, patient_id, start_time, status, payment_value, recurring_id, recurrence_period, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            crypto.randomUUID(),
+            series.patient_id,
+            isoStr,
+            'scheduled',
+            series.payment_value,
+            series.recurring_id,
+            series.recurrence_period,
+            series.notes
+          );
+          console.log(`[Sync] Sessão recorrente criada: ${series.recurring_id} em ${isoStr}`);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Sync] Erro ao sincronizar sessões recorrentes:', err);
+  }
+}
+
+ipcMain.handle('sync-recurring-sessions', async (event) => {
+  syncRecurringSessions();
+  event.sender.send('refresh-data');
+  return { success: true };
 });
 
 function getDb() {

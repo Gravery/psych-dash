@@ -38,5 +38,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   syncBillingReminders: (params) => ipcRenderer.invoke('sync-billing-reminders', params),
   markBillingPaid: (params) => ipcRenderer.invoke('mark-billing-paid', params),
   revertBilling: (params) => ipcRenderer.invoke('revert-billing', params),
+  syncRecurringSessions: () => ipcRenderer.invoke('sync-recurring-sessions'),
   updateAppSettings: (settings) => ipcRenderer.invoke('update-app-settings', settings)
 });

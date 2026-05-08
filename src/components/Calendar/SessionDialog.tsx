@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Clock, DollarSign, Trash2, Calendar as CalendarIcon, Save } from 'lucide-react';
+import { X, Clock, DollarSign, Trash2, Calendar as CalendarIcon, Save, Repeat } from 'lucide-react';
 import { execSQL, querySQL } from '../../db/db';
 
 interface Session {
@@ -14,6 +14,7 @@ interface Session {
   notes?: string;
   confirmed: boolean;
   recurring_id?: string;
+  recurrence_period?: string;
 }
 
 interface SessionDialogProps {
@@ -53,6 +54,10 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ session, onClose, onUpdat
   const handleSave = async () => {
     setIsSaving(true);
     try {
+      const finalRecurringId = editedSession.recurrence_period && !session.recurring_id 
+        ? crypto.randomUUID() 
+        : session.recurring_id;
+
       await execSQL(
         `UPDATE sessions SET 
           status = ?, 
@@ -61,7 +66,9 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ session, onClose, onUpdat
           payment_method = ?, 
           notes = ?, 
           confirmed = ?,
-          start_time = ?
+          start_time = ?,
+          recurrence_period = ?,
+          recurring_id = ?
         WHERE id = ?`,
         [
           editedSession.status,
@@ -71,13 +78,19 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ session, onClose, onUpdat
           editedSession.notes || null,
           editedSession.confirmed ? 1 : 0,
           editedSession.start_time,
+          editedSession.recurrence_period || null,
+          finalRecurringId || null,
           session.id
         ]
       );
 
-      if (editedSession.status === 'completed' && session.status !== 'completed' && session.recurring_id) {
-        await generateNextSession(session);
+      if (finalRecurringId || editedSession.recurrence_period) {
+        // Sempre sincroniza para garantir que o horizonte de 2 meses esteja preenchido
+        await (window as any).electronAPI.syncRecurringSessions();
       }
+
+      // Sincroniza faturamento para atualizar os valores de "Acerto" no calendário
+      await (window as any).electronAPI.syncBillingReminders({ patientId: session.patient_id });
 
       onUpdate();
       onClose();
@@ -88,28 +101,6 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ session, onClose, onUpdat
     }
   };
 
-  const generateNextSession = async (current: Session) => {
-    const existing: any = await querySQL(
-      'SELECT id FROM sessions WHERE recurring_id = ? AND start_time > ? AND deleted_at IS NULL',
-      [current.recurring_id, current.start_time]
-    );
-
-    if (existing && existing.length > 0) {
-      console.log('Next session already exists.');
-      return;
-    }
-
-    const currentDate = new Date(current.start_time);
-    let nextDate = new Date(currentDate);
-
-    nextDate.setDate(currentDate.getDate() + 7);
-
-    await execSQL(
-      'INSERT INTO sessions (id, patient_id, start_time, status, recurring_id, payment_value) VALUES (?, ?, ?, ?, ?, ?)',
-      [crypto.randomUUID(), current.patient_id, nextDate.toISOString(), 'scheduled', current.recurring_id, current.payment_value]
-    );
-  };
-
   const [showConfirmDelete, setShowConfirmDelete] = useState<{ isSeries: boolean } | null>(null);
 
   const handleDelete = async (isSeries: boolean) => {
@@ -117,6 +108,14 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ session, onClose, onUpdat
     setIsSaving(true);
     try {
       if (isSeries) {
+        // Para a recorrência e deleta sessões futuras
+        await execSQL(
+          `UPDATE sessions 
+            SET recurrence_period = NULL 
+            WHERE (recurring_id = ? OR id = ?)`,
+          [session.recurring_id, session.recurring_id]
+        );
+
         await execSQL(
           `UPDATE sessions 
             SET deleted_at = CURRENT_TIMESTAMP 
@@ -128,6 +127,10 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ session, onClose, onUpdat
       } else {
         await execSQL('UPDATE sessions SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?', [session.id]);
       }
+
+      // Sincroniza faturamento para atualizar os valores de "Acerto" no calendário
+      await (window as any).electronAPI.syncBillingReminders({ patientId: session.patient_id });
+
       onUpdate();
       onClose();
     } catch (err) {
@@ -245,6 +248,22 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ session, onClose, onUpdat
             )}
           </div>
         )}
+
+        <div style={{ marginBottom: '20px' }}>
+          <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500', color: 'var(--text-secondary)' }}>
+            <Repeat size={16} style={{ marginRight: '8px', verticalAlign: 'middle' }} /> Recorrência
+          </label>
+          <select 
+            value={editedSession.recurrence_period || 'none'} 
+            onChange={e => setEditedSession({ ...editedSession, recurrence_period: e.target.value === 'none' ? undefined : e.target.value })}
+            style={{ width: '100%' }}
+          >
+            <option value="none">Sem recorrência</option>
+            <option value="weekly">Semanal</option>
+            <option value="biweekly">Quinzenal</option>
+            <option value="monthly">Mensal</option>
+          </select>
+        </div>
 
         <div style={{ marginBottom: '20px' }}>
           <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500' }}>
