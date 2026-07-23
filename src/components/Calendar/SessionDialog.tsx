@@ -195,6 +195,16 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ session, onClose, onUpdat
               <option value="cancelled">Cancelada pelo Paciente</option>
               <option value="missed">Falta do Paciente</option>
             </select>
+            {editedSession.status === 'cancelled' && (
+              <div style={{ marginTop: '10px', fontSize: '11px', color: 'var(--error)', backgroundColor: 'rgba(239, 68, 68, 0.08)', padding: '6px 10px', borderRadius: '6px', borderLeft: '3px solid var(--error)', lineHeight: '1.4' }}>
+                💡 <b>Dica de Assiduidade:</b> Considere reagendar o paciente para outra data nesta mesma semana.
+              </div>
+            )}
+            {editedSession.status === 'missed' && (
+              <div style={{ marginTop: '10px', fontSize: '11px', color: 'var(--warning)', backgroundColor: 'rgba(245, 158, 11, 0.08)', padding: '6px 10px', borderRadius: '6px', borderLeft: '3px solid var(--warning)', lineHeight: '1.4' }}>
+                💡 <b>Falta Identificada:</b> Considere enviar uma mensagem para reagendar e reengajar o paciente.
+              </div>
+            )}
           </div>
 
           <div className="card" style={{ padding: '16px', backgroundColor: 'var(--bg-primary)', border: 'none' }}>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Download } from 'lucide-react';
 import { querySQL } from '../../db/db';
+import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
@@ -9,6 +10,7 @@ const FinancialReport: React.FC = () => {
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [reportData, setReportData] = useState<any[]>([]);
   const [summary, setSummary] = useState({ total: 0, paid: 0, pending: 0 });
+  const [chartData, setChartData] = useState<any[]>([]);
 
   const months = [
     'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
@@ -20,24 +22,50 @@ const FinancialReport: React.FC = () => {
     const endOfMonth = new Date(selectedYear, selectedMonth + 1, 0, 23, 59, 59).toISOString();
 
     try {
-      const result: any = await querySQL(
-        `SELECT s.*, p.name as patient_name 
-         FROM sessions s 
-         JOIN patients p ON s.patient_id = p.id 
-         WHERE s.start_time BETWEEN ? AND ? 
-         AND s.deleted_at IS NULL
-         ORDER BY s.start_time ASC`,
-        [startOfMonth, endOfMonth]
-      );
+      const [result, historyResult]: any = await Promise.all([
+        querySQL(
+          `SELECT s.*, p.name as patient_name 
+           FROM sessions s 
+           JOIN patients p ON s.patient_id = p.id 
+           WHERE s.start_time BETWEEN ? AND ? 
+           AND s.deleted_at IS NULL
+           ORDER BY s.start_time ASC`,
+          [startOfMonth, endOfMonth]
+        ),
+        querySQL(
+          `SELECT 
+             strftime('%m', s.start_time) as month_num,
+             strftime('%Y', s.start_time) as year_val,
+             SUM(CASE WHEN s.status != 'cancelled' THEN s.payment_value ELSE 0 END) as total_val,
+             SUM(CASE WHEN s.status != 'cancelled' AND s.payment_status = 'paid' THEN s.payment_value ELSE 0 END) as paid_val
+           FROM sessions s
+           WHERE s.deleted_at IS NULL 
+           AND (s.type IS NULL OR s.type = 'session')
+           GROUP BY year_val, month_num
+           ORDER BY year_val ASC, month_num ASC
+           LIMIT 6`
+        )
+      ]);
 
       const data = result || [];
       setReportData(data);
 
-      const total = data.reduce((acc: number, s: any) => acc + (s.payment_value || 0), 0);
-      const paid = data.filter((s: any) => s.payment_status === 'paid').reduce((acc: number, s: any) => acc + (s.payment_value || 0), 0);
+      const total = data.filter((s: any) => s.status !== 'cancelled').reduce((acc: number, s: any) => acc + (s.payment_value || 0), 0);
+      const paid = data.filter((s: any) => s.status !== 'cancelled' && s.payment_status === 'paid').reduce((acc: number, s: any) => acc + (s.payment_value || 0), 0);
       const pending = total - paid;
 
       setSummary({ total, paid, pending });
+
+      const formattedChart = (historyResult || []).map((h: any) => {
+        const monthName = months[parseInt(h.month_num) - 1]?.slice(0, 3) || '';
+        return {
+          name: `${monthName}/${h.year_val.slice(2)}`,
+          'Faturamento': h.total_val || 0,
+          'Recebido': h.paid_val || 0,
+          'Pendente': (h.total_val || 0) - (h.paid_val || 0)
+        };
+      });
+      setChartData(formattedChart);
 
     } catch (err) {
       console.error('Error fetching report data:', err);
@@ -47,6 +75,26 @@ const FinancialReport: React.FC = () => {
   useEffect(() => {
     fetchReportData();
   }, [selectedMonth, selectedYear]);
+
+  const getStatusLabel = (status: string) => {
+    if (status === 'completed') return 'Realizada';
+    if (status === 'cancelled') return 'Cancelada';
+    if (status === 'missed') return 'Falta';
+    return 'Agendada';
+  };
+
+  const getStatusStyles = (status: string) => {
+    switch (status) {
+      case 'completed':
+        return { color: 'var(--success)', backgroundColor: 'rgba(16, 185, 129, 0.1)' };
+      case 'cancelled':
+        return { color: 'var(--error)', backgroundColor: 'rgba(239, 68, 68, 0.1)' };
+      case 'missed':
+        return { color: 'var(--warning)', backgroundColor: 'rgba(245, 158, 11, 0.1)' };
+      default:
+        return { color: 'var(--accent-primary)', backgroundColor: 'rgba(14, 165, 233, 0.1)' };
+    }
+  };
 
   const handleExportPDF = () => {
     const doc = new jsPDF() as any;
@@ -61,7 +109,7 @@ const FinancialReport: React.FC = () => {
     const tableData = reportData.map(s => [
       new Date(s.start_time).toLocaleDateString('pt-BR'),
       s.patient_name,
-      s.status === 'completed' ? 'Realizada' : 'Agendada',
+      getStatusLabel(s.status),
       s.payment_status === 'paid' ? 'Pago' : 'Pendente',
       `R$ ${s.payment_value.toFixed(2)}`
     ]);
@@ -104,6 +152,44 @@ const FinancialReport: React.FC = () => {
         </div>
       </div>
 
+      {/* Histórico Financeiro - Gráfico */}
+      {chartData.length > 0 && (
+        <section className="card glass" style={{ marginBottom: '40px', padding: '24px' }}>
+          <h3 style={{ fontWeight: 'bold', marginBottom: '20px' }}>Evolução de Ganhos (Últimos 6 meses)</h3>
+          <div style={{ width: '100%', height: '300px' }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={chartData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="colorFaturamento" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="var(--accent-primary)" stopOpacity={0.2}/>
+                    <stop offset="95%" stopColor="var(--accent-primary)" stopOpacity={0}/>
+                  </linearGradient>
+                  <linearGradient id="colorRecebido" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="var(--success)" stopOpacity={0.2}/>
+                    <stop offset="95%" stopColor="var(--success)" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" opacity={0.5} />
+                <XAxis dataKey="name" stroke="var(--text-secondary)" fontSize={12} tickLine={false} />
+                <YAxis stroke="var(--text-secondary)" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(v) => `R$ ${v}`} />
+                <Tooltip 
+                  contentStyle={{ 
+                    backgroundColor: 'var(--bg-secondary)', 
+                    borderColor: 'var(--border-color)', 
+                    borderRadius: '8px',
+                    color: 'var(--text-primary)'
+                  }} 
+                  formatter={(value: any) => [`R$ ${parseFloat(value).toFixed(2)}`, '']}
+                />
+                <Legend verticalAlign="top" height={36} iconType="circle" />
+                <Area type="monotone" dataKey="Faturamento" stroke="var(--accent-primary)" strokeWidth={2.5} fillOpacity={1} fill="url(#colorFaturamento)" />
+                <Area type="monotone" dataKey="Recebido" stroke="var(--success)" strokeWidth={2.5} fillOpacity={1} fill="url(#colorRecebido)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </section>
+      )}
+
       <section className="card glass">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
           <h3 style={{ fontWeight: 'bold' }}>Sessões do Período</h3>
@@ -129,15 +215,17 @@ const FinancialReport: React.FC = () => {
               </tr>
             </thead>
             <tbody>
-              {reportData.map(s => (
-                <tr key={s.id} style={{ borderBottom: '1px solid var(--border-color)', fontSize: '14px' }}>
-                  <td style={{ padding: '12px' }}>{new Date(s.start_time).toLocaleDateString('pt-BR')}</td>
-                  <td style={{ padding: '12px', fontWeight: '600' }}>{s.patient_name}</td>
-                  <td style={{ padding: '12px' }}>
-                    <span style={{ fontSize: '11px', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'var(--bg-primary)' }}>
-                      {s.status === 'completed' ? 'Realizada' : 'Agendada'}
-                    </span>
-                  </td>
+              {reportData.map(s => {
+                const statusStyle = getStatusStyles(s.status);
+                return (
+                  <tr key={s.id} style={{ borderBottom: '1px solid var(--border-color)', fontSize: '14px' }}>
+                    <td style={{ padding: '12px' }}>{new Date(s.start_time).toLocaleDateString('pt-BR')}</td>
+                    <td style={{ padding: '12px', fontWeight: '600' }}>{s.patient_name}</td>
+                    <td style={{ padding: '12px' }}>
+                      <span style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '4px', fontWeight: 'bold', ...statusStyle }}>
+                        {getStatusLabel(s.status)}
+                      </span>
+                    </td>
                   <td style={{ padding: '12px' }}>
                     <span style={{
                       color: s.payment_status === 'paid' ? 'var(--success)' : 'var(--error)',
@@ -149,7 +237,8 @@ const FinancialReport: React.FC = () => {
                   </td>
                   <td style={{ padding: '12px', fontWeight: 'bold' }}>R$ {(s.payment_value || 0).toFixed(2)}</td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

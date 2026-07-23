@@ -38,7 +38,7 @@ const Dashboard: React.FC<DashboardProps> = (props) => {
       
       // Pendentes: sessões pendentes + cobranças pendentes
       const sPending: any = await querySQL(
-        "SELECT SUM(payment_value) as total FROM sessions WHERE payment_status = 'pending' AND start_time BETWEEN ? AND ? AND deleted_at IS NULL AND (type IS NULL OR type = 'session')",
+        "SELECT SUM(payment_value) as total FROM sessions WHERE payment_status = 'pending' AND start_time BETWEEN ? AND ? AND deleted_at IS NULL AND (type IS NULL OR type = 'session') AND status != 'cancelled'",
         [firstDayMonth, lastDayMonth]
       );
       const bPending: any = await querySQL(
@@ -48,7 +48,7 @@ const Dashboard: React.FC<DashboardProps> = (props) => {
 
       // Receita: sessões pagas + cobranças pagas
       const sIncome: any = await querySQL(
-        "SELECT SUM(payment_value) as total FROM sessions WHERE payment_status = 'paid' AND start_time BETWEEN ? AND ? AND deleted_at IS NULL AND (type IS NULL OR type = 'session')",
+        "SELECT SUM(payment_value) as total FROM sessions WHERE payment_status = 'paid' AND start_time BETWEEN ? AND ? AND deleted_at IS NULL AND (type IS NULL OR type = 'session') AND status != 'cancelled'",
         [firstDayMonth, lastDayMonth]
       );
       const bIncome: any = await querySQL(

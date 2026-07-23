@@ -4,6 +4,13 @@ import { querySQL, execSQL } from '../../db/db';
 import SessionDialog from './SessionDialog';
 import BillingDialog from './BillingDialog';
 
+const getLocalDateString = (date: Date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
 const CalendarView: React.FC = () => {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [sessions, setSessions] = useState<any[]>([]);
@@ -207,11 +214,11 @@ const CalendarView: React.FC = () => {
     for (let i = 0; i < totalDays; i++) {
       const dObj = new Date(startDate);
       dObj.setDate(startDate.getDate() + i);
-      const datePrefix = dObj.toISOString().split('T')[0];
+      const datePrefix = getLocalDateString(dObj);
 
-      const daySessions = sessions.filter(s => s.start_time.startsWith(datePrefix))
+      const daySessions = sessions.filter(s => getLocalDateString(new Date(s.start_time)) === datePrefix)
         .filter(() => filterType === 'all' || filterType === 'sessions');
-      const dayBillings = billings.filter(b => b.due_date.startsWith(datePrefix))
+      const dayBillings = billings.filter(b => getLocalDateString(new Date(b.due_date)) === datePrefix)
         .filter(() => filterType === 'all' || filterType === 'billings');
 
       const today = new Date();
@@ -228,7 +235,11 @@ const CalendarView: React.FC = () => {
           border: '1px solid var(--border-color)',
           display: 'flex',
           flexDirection: 'column',
-          transition: 'all 0.2s ease'
+          transition: 'all 0.2s ease',
+          cursor: 'pointer'
+        }} onClick={() => {
+          setNewSession({ ...newSession, date: datePrefix });
+          setShowAddModal(true);
         }}>
           <span style={{
             fontSize: '12px',
@@ -411,6 +422,47 @@ const CalendarView: React.FC = () => {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)' }}>
           {renderDays()}
+        </div>
+      </div>
+
+      {/* Legenda do Calendário */}
+      <div style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: '16px',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginTop: '16px',
+        padding: '12px 24px',
+        backgroundColor: 'var(--bg-secondary)',
+        borderRadius: '12px',
+        border: '1px solid var(--border-color)',
+        fontSize: '12px',
+        color: 'var(--text-secondary)'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: 'var(--accent-primary)' }} />
+          <span>Sessão Agendada</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: 'var(--success)' }} />
+          <span>Sessão Realizada</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: 'var(--error)' }} />
+          <span>Sessão Cancelada</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: 'var(--warning)' }} />
+          <span>Falta</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span style={{ width: '10px', height: '10px', borderRadius: '2px', backgroundColor: '#f59e0b', opacity: 0.8 }} />
+          <span>Acerto Pendente</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span style={{ width: '10px', height: '10px', borderRadius: '2px', backgroundColor: 'var(--success)', opacity: 0.8 }} />
+          <span>Acerto Pago</span>
         </div>
       </div>
 

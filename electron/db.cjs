@@ -113,6 +113,7 @@ function initDatabase() {
   syncRecurringSessions();
   syncBillingReminders();
   startLocalServer();
+  runAutomaticBackup();
 }
 
 function migrateBillingToNewTable() {
@@ -496,7 +497,7 @@ function syncBillingReminders(patientId = null) {
         const monthStart = new Date(firstOfTarget.getFullYear(), firstOfTarget.getMonth(), 1).toISOString();
         const monthEnd = new Date(firstOfTarget.getFullYear(), firstOfTarget.getMonth() + 1, 0, 23, 59, 59).toISOString();
         const sessionsInMonth = db.prepare(
-          "SELECT SUM(payment_value) as total, COUNT(*) as count FROM sessions WHERE patient_id = ? AND start_time BETWEEN ? AND ? AND deleted_at IS NULL AND (type IS NULL OR type = 'session')"
+          "SELECT SUM(payment_value) as total, COUNT(*) as count FROM sessions WHERE patient_id = ? AND start_time BETWEEN ? AND ? AND deleted_at IS NULL AND (type IS NULL OR type = 'session') AND status != 'cancelled'"
         ).get(p.id, monthStart, monthEnd);
 
         const amount = sessionsInMonth?.total || 0;
@@ -542,7 +543,7 @@ ipcMain.handle('mark-billing-paid', async (event, { billingId, paymentMethod, am
     const monthEnd = new Date(year, month + 1, 0, 23, 59, 59).toISOString();
 
     const updated = db.prepare(
-      "UPDATE sessions SET payment_status = 'paid' WHERE patient_id = ? AND start_time BETWEEN ? AND ? AND payment_status = 'pending' AND deleted_at IS NULL AND (type IS NULL OR type = 'session')"
+      "UPDATE sessions SET payment_status = 'paid' WHERE patient_id = ? AND start_time BETWEEN ? AND ? AND payment_status = 'pending' AND deleted_at IS NULL AND (type IS NULL OR type = 'session') AND status != 'cancelled'"
     ).run(billing.patient_id, monthStart, monthEnd);
 
     console.log(`[Billing] Cobrança ${billingId} marcada como paga. ${updated.changes} sessões atualizadas.`);
@@ -570,7 +571,7 @@ ipcMain.handle('revert-billing', async (event, { billingId }) => {
     const monthEnd = new Date(year, month + 1, 0, 23, 59, 59).toISOString();
 
     db.prepare(
-      "UPDATE sessions SET payment_status = 'pending' WHERE patient_id = ? AND start_time BETWEEN ? AND ? AND payment_status = 'paid' AND deleted_at IS NULL AND (type IS NULL OR type = 'session')"
+      "UPDATE sessions SET payment_status = 'pending' WHERE patient_id = ? AND start_time BETWEEN ? AND ? AND payment_status = 'paid' AND deleted_at IS NULL AND (type IS NULL OR type = 'session') AND status != 'cancelled'"
     ).run(billing.patient_id, monthStart, monthEnd);
 
     app.emit('refresh-patient-data', { patientId: billing.patient_id });
@@ -660,8 +661,53 @@ ipcMain.handle('sync-recurring-sessions', async (event) => {
   return { success: true };
 });
 
+function runAutomaticBackup() {
+  try {
+    const userDataPath = app.getPath('userData');
+    const dbPath = path.join(userDataPath, 'psychology_dashboard.sqlite3');
+    if (!fs.existsSync(dbPath)) return;
+
+    const backupDir = path.join(userDataPath, 'backups');
+    if (!fs.existsSync(backupDir)) {
+      fs.mkdirSync(backupDir, { recursive: true });
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupPath = path.join(backupDir, `psychology_dashboard_backup_${timestamp}.sqlite3`);
+
+    console.log('[Backup] Iniciando backup automático seguro...');
+    db.backup(backupPath)
+      .then(() => {
+        console.log(`[Backup] Backup concluído com sucesso em: ${backupPath}`);
+        
+        // Limpa arquivos antigos para reter apenas as últimas 5 cópias
+        const files = fs.readdirSync(backupDir)
+          .filter(file => file.startsWith('psychology_dashboard_backup_') && file.endsWith('.sqlite3'))
+          .map(file => ({
+            name: file,
+            path: path.join(backupDir, file),
+            time: fs.statSync(path.join(backupDir, file)).mtime.getTime()
+          }))
+          .sort((a, b) => b.time - a.time);
+
+        if (files.length > 5) {
+          const toDelete = files.slice(5);
+          for (const f of toDelete) {
+            fs.unlinkSync(f.path);
+            console.log(`[Backup] Cópia antiga descartada: ${f.name}`);
+          }
+        }
+      })
+      .catch(err => {
+        console.error('[Backup] Falha ao executar db.backup():', err);
+      });
+  } catch (err) {
+    console.error('[Backup] Erro crítico no fluxo de backup:', err);
+  }
+}
+
 function getDb() {
   return db;
 }
 
-module.exports = { initDatabase, getDb };
+module.exports = { initDatabase, getDb, runAutomaticBackup };
