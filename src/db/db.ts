@@ -64,6 +64,13 @@ export const initDB = async () => {
             paid_at DATETIME, deleted_at DATETIME,
             FOREIGN KEY(patient_id) REFERENCES patients(id)
         );
+        CREATE TABLE IF NOT EXISTS custom_holidays (
+            id TEXT PRIMARY KEY,
+            date TEXT NOT NULL,
+            name TEXT NOT NULL,
+            type TEXT DEFAULT 'municipal',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
       `);
       await syncWebDB();
     }

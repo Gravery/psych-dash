@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon, Clock, User, Repeat, DollarSign, CheckCircle } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon, Clock, User, Repeat, DollarSign, CheckCircle, Flag, AlertCircle } from 'lucide-react';
 import { querySQL, execSQL } from '../../db/db';
+import { useHolidays } from '../../hooks/useHolidays';
+import { getCalendarCacheKey, getCalendarCache, setCalendarCache, invalidateCalendarCache } from '../../utils/calendarCache';
 import SessionDialog from './SessionDialog';
 import BillingDialog from './BillingDialog';
 
@@ -13,15 +15,20 @@ const getLocalDateString = (date: Date) => {
 
 const CalendarView: React.FC = () => {
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [sessions, setSessions] = useState<any[]>([]);
-  const [billings, setBillings] = useState<any[]>([]);
-  const [patients, setPatients] = useState<any[]>([]);
+  const [viewMode, setViewMode] = useState<'month' | 'week'>('month');
+  const { isHoliday } = useHolidays(currentDate.getFullYear());
+
+  const initialKey = getCalendarCacheKey('month', currentDate);
+  const initialCache = getCalendarCache(initialKey);
+
+  const [sessions, setSessions] = useState<any[]>(() => initialCache?.sessions || []);
+  const [billings, setBillings] = useState<any[]>(() => initialCache?.billings || []);
+  const [patients, setPatients] = useState<any[]>(() => initialCache?.patients || []);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showBillingModal, setShowBillingModal] = useState(false);
   const [selectedSession, setSelectedSession] = useState<any | null>(null);
   const [selectedBilling, setSelectedBilling] = useState<any | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [viewMode, setViewMode] = useState<'month' | 'week'>('month');
   const [filterType, setFilterType] = useState<'all' | 'sessions' | 'billings'>('all');
 
   const [newSession, setNewSession] = useState({
@@ -42,7 +49,23 @@ const CalendarView: React.FC = () => {
 
   const isRefreshing = React.useRef(false);
 
-  const fetchData = async (silent = false) => {
+  const fetchData = async (silent = false, forceRefresh = false) => {
+    const cacheKey = getCalendarCacheKey(viewMode, currentDate);
+    const cached = getCalendarCache(cacheKey);
+
+    if (cached && !forceRefresh) {
+      setSessions(cached.sessions);
+      setBillings(cached.billings);
+      if (cached.patients?.length) {
+        setPatients(cached.patients);
+      }
+      const isFresh = Date.now() - cached.fetchedAt < 5 * 60 * 1000;
+      if (isFresh) {
+        return;
+      }
+      silent = true;
+    }
+
     if (isRefreshing.current) return;
 
     if (!silent) setIsLoading(true);
@@ -98,9 +121,20 @@ const CalendarView: React.FC = () => {
         querySQL("SELECT id, name, session_value FROM patients WHERE status = 'active' AND deleted_at IS NULL ORDER BY name ASC")
       ]);
 
-      setSessions(sResult || []);
-      setBillings(bResult || []);
-      setPatients(pResult || []);
+      const freshSessions = sResult || [];
+      const freshBillings = bResult || [];
+      const freshPatients = pResult || [];
+
+      setSessions(freshSessions);
+      setBillings(freshBillings);
+      setPatients(freshPatients);
+
+      // Armazena no cache de períodos visitados
+      setCalendarCache(cacheKey, {
+        sessions: freshSessions,
+        billings: freshBillings,
+        patients: freshPatients
+      });
     } catch (err) {
       console.error('Error fetching calendar data:', err);
     } finally {
@@ -110,6 +144,14 @@ const CalendarView: React.FC = () => {
   };
 
   useEffect(() => {
+    const key = getCalendarCacheKey(viewMode, currentDate);
+    const cached = getCalendarCache(key);
+    if (cached) {
+      setSessions(cached.sessions);
+      setBillings(cached.billings);
+      if (cached.patients?.length) setPatients(cached.patients);
+    }
+
     fetchData();
 
     let unsubscribe: (() => void) | null = null;
@@ -117,8 +159,9 @@ const CalendarView: React.FC = () => {
 
     if ((window as any).electronAPI?.onRefreshData) {
       unsubscribe = (window as any).electronAPI.onRefreshData(() => {
+        invalidateCalendarCache();
         if (debounceTimer) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => fetchData(true), 300);
+        debounceTimer = setTimeout(() => fetchData(true, true), 300);
       });
     }
 
@@ -159,7 +202,8 @@ const CalendarView: React.FC = () => {
 
       setShowAddModal(false);
       setNewSession({ patient_id: '', date: '', time: '', recurrence: 'none', payment_value: '', notes: '' });
-      fetchData();
+      invalidateCalendarCache();
+      fetchData(true, true);
     } catch (err) {
       console.error('Error adding session:', err);
     }
@@ -179,7 +223,8 @@ const CalendarView: React.FC = () => {
 
       setShowBillingModal(false);
       setNewBilling({ patient_id: '', date: new Date().toISOString().split('T')[0], amount: '', notes: '' });
-      fetchData();
+      invalidateCalendarCache();
+      fetchData(true, true);
     } catch (err) {
       console.error('Error adding billing reminder:', err);
     }
@@ -225,6 +270,7 @@ const CalendarView: React.FC = () => {
       const isToday = dObj.getDate() === today.getDate() && dObj.getMonth() === today.getMonth() && dObj.getFullYear() === today.getFullYear();
       const isCurrentMonth = dObj.getMonth() === month;
       const shouldShade = !isWeek && !isCurrentMonth;
+      const holiday = isHoliday(datePrefix);
 
       days.push(
         <div key={dObj.toISOString()} style={{
@@ -241,19 +287,71 @@ const CalendarView: React.FC = () => {
           setNewSession({ ...newSession, date: datePrefix });
           setShowAddModal(true);
         }}>
-          <span style={{
-            fontSize: '12px',
-            fontWeight: isToday ? 'bold' : 'normal',
-            color: isToday ? 'var(--accent-primary)' : 'var(--text-secondary)',
-            marginBottom: '8px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '4px'
-          }}>
-            {dObj.getDate()} {isToday && '•'}
-          </span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <span style={{
+              fontSize: '12px',
+              fontWeight: isToday ? 'bold' : 'normal',
+              color: isToday ? 'var(--accent-primary)' : 'var(--text-secondary)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px'
+            }}>
+              {dObj.getDate()} {isToday && '•'}
+            </span>
+            {holiday && (
+              <span
+                style={{
+                  fontSize: '9px',
+                  padding: '1px 5px',
+                  borderRadius: '4px',
+                  fontWeight: '700',
+                  backgroundColor: holiday.type === 'national' 
+                    ? 'rgba(225, 29, 72, 0.15)' 
+                    : holiday.type === 'state' 
+                      ? 'rgba(37, 99, 235, 0.15)' 
+                      : 'rgba(217, 119, 6, 0.15)',
+                  color: holiday.type === 'national' ? '#e11d48' : holiday.type === 'state' ? '#2563eb' : '#d97706'
+                }}
+                title={`${holiday.type === 'national' ? 'Feriado Nacional' : holiday.type === 'state' ? 'Feriado Estadual' : 'Feriado Municipal'}: ${holiday.name}`}
+              >
+                {holiday.type === 'national' ? 'Nacional' : holiday.type === 'state' ? 'Estadual' : 'Municipal'}
+              </span>
+            )}
+          </div>
 
           <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            {/* Holiday badge */}
+            {holiday && (
+              <div
+                title={`${holiday.type === 'national' ? 'Feriado Nacional' : holiday.type === 'state' ? 'Feriado Estadual' : 'Feriado Municipal'}: ${holiday.name}`}
+                style={{
+                  fontSize: isWeek ? '11px' : '10px',
+                  padding: '3px 6px',
+                  borderRadius: '4px',
+                  backgroundColor: holiday.type === 'national'
+                    ? 'rgba(225, 29, 72, 0.12)'
+                    : holiday.type === 'state'
+                      ? 'rgba(37, 99, 235, 0.12)'
+                      : 'rgba(217, 119, 6, 0.12)',
+                  borderLeft: `3px solid ${
+                    holiday.type === 'national' ? '#e11d48' : holiday.type === 'state' ? '#2563eb' : '#d97706'
+                  }`,
+                  color: holiday.type === 'national' ? '#e11d48' : holiday.type === 'state' ? '#2563eb' : '#d97706',
+                  fontWeight: '700',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  marginBottom: '2px'
+                }}
+              >
+                <Flag size={10} />
+                <span>{holiday.name}</span>
+              </div>
+            )}
+
             {/* Billing reminders */}
             {dayBillings.map(b => {
               const isPaid = b.status === 'paid';
@@ -344,6 +442,12 @@ const CalendarView: React.FC = () => {
                 const d = new Date(currentDate);
                 if (viewMode === 'month') d.setMonth(d.getMonth() - 1);
                 else d.setDate(d.getDate() - 7);
+                const nextKey = getCalendarCacheKey(viewMode, d);
+                const cached = getCalendarCache(nextKey);
+                if (cached) {
+                  setSessions(cached.sessions);
+                  setBillings(cached.billings);
+                }
                 setCurrentDate(d);
               }}
               className="btn-ghost" style={{ padding: '6px' }}
@@ -364,6 +468,12 @@ const CalendarView: React.FC = () => {
                 const d = new Date(currentDate);
                 if (viewMode === 'month') d.setMonth(d.getMonth() + 1);
                 else d.setDate(d.getDate() + 7);
+                const nextKey = getCalendarCacheKey(viewMode, d);
+                const cached = getCalendarCache(nextKey);
+                if (cached) {
+                  setSessions(cached.sessions);
+                  setBillings(cached.billings);
+                }
                 setCurrentDate(d);
               }}
               className="btn-ghost" style={{ padding: '6px' }}
@@ -374,13 +484,29 @@ const CalendarView: React.FC = () => {
 
           <div style={{ display: 'flex', gap: '4px', padding: '4px', backgroundColor: 'var(--bg-secondary)', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
             <button
-              onClick={() => setViewMode('month')}
+              onClick={() => {
+                const nextKey = getCalendarCacheKey('month', currentDate);
+                const cached = getCalendarCache(nextKey);
+                if (cached) {
+                  setSessions(cached.sessions);
+                  setBillings(cached.billings);
+                }
+                setViewMode('month');
+              }}
               style={{ padding: '6px 12px', fontSize: '12px', borderRadius: '6px', backgroundColor: viewMode === 'month' ? 'var(--accent-primary)' : 'transparent', color: viewMode === 'month' ? 'white' : 'var(--text-secondary)' }}
             >
               Mês
             </button>
             <button
-              onClick={() => setViewMode('week')}
+              onClick={() => {
+                const nextKey = getCalendarCacheKey('week', currentDate);
+                const cached = getCalendarCache(nextKey);
+                if (cached) {
+                  setSessions(cached.sessions);
+                  setBillings(cached.billings);
+                }
+                setViewMode('week');
+              }}
               style={{ padding: '6px 12px', fontSize: '12px', borderRadius: '6px', backgroundColor: viewMode === 'week' ? 'var(--accent-primary)' : 'transparent', color: viewMode === 'week' ? 'white' : 'var(--text-secondary)' }}
             >
               Semana
@@ -464,6 +590,18 @@ const CalendarView: React.FC = () => {
           <span style={{ width: '10px', height: '10px', borderRadius: '2px', backgroundColor: 'var(--success)', opacity: 0.8 }} />
           <span>Acerto Pago</span>
         </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span style={{ width: '10px', height: '10px', borderRadius: '2px', backgroundColor: '#e11d48' }} />
+          <span>Feriado Nacional</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span style={{ width: '10px', height: '10px', borderRadius: '2px', backgroundColor: '#2563eb' }} />
+          <span>Feriado Estadual</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span style={{ width: '10px', height: '10px', borderRadius: '2px', backgroundColor: '#d97706' }} />
+          <span>Feriado Municipal</span>
+        </div>
       </div>
 
       {/* Modal: Novo Agendamento */}
@@ -471,6 +609,28 @@ const CalendarView: React.FC = () => {
         <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
           <div className="card glass" style={{ width: '100%', maxWidth: '450px' }}>
             <h2 style={{ marginBottom: '24px' }}>Novo Agendamento</h2>
+            {(() => {
+              const newSessionHoliday = newSession.date ? isHoliday(newSession.date) : null;
+              return newSessionHoliday ? (
+                <div style={{
+                  padding: '10px 12px',
+                  borderRadius: '8px',
+                  backgroundColor: newSessionHoliday.type === 'national' ? 'rgba(225, 29, 72, 0.1)' : newSessionHoliday.type === 'state' ? 'rgba(37, 99, 235, 0.1)' : 'rgba(217, 119, 6, 0.1)',
+                  border: `1px solid ${newSessionHoliday.type === 'national' ? 'rgba(225, 29, 72, 0.3)' : newSessionHoliday.type === 'state' ? 'rgba(37, 99, 235, 0.3)' : 'rgba(217, 119, 6, 0.3)'}`,
+                  color: newSessionHoliday.type === 'national' ? '#e11d48' : newSessionHoliday.type === 'state' ? '#2563eb' : '#d97706',
+                  fontSize: '12px',
+                  marginBottom: '16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}>
+                  <AlertCircle size={16} />
+                  <span>
+                    <b>Atenção:</b> Esta data é feriado {newSessionHoliday.type === 'national' ? 'nacional' : newSessionHoliday.type === 'state' ? 'estadual' : 'municipal'}: <b>{newSessionHoliday.name}</b>.
+                  </span>
+                </div>
+              ) : null;
+            })()}
             <form onSubmit={handleAddSession}>
               <div style={{ marginBottom: '16px' }}>
                 <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>
@@ -611,7 +771,10 @@ const CalendarView: React.FC = () => {
           key={selectedSession.id}
           session={selectedSession}
           onClose={() => setSelectedSession(null)}
-          onUpdate={() => fetchData(true)}
+          onUpdate={() => {
+            invalidateCalendarCache();
+            fetchData(true, true);
+          }}
         />
       )}
 
@@ -621,7 +784,10 @@ const CalendarView: React.FC = () => {
           key={selectedBilling.id}
           billing={selectedBilling}
           onClose={() => setSelectedBilling(null)}
-          onUpdate={() => fetchData(true)}
+          onUpdate={() => {
+            invalidateCalendarCache();
+            fetchData(true, true);
+          }}
         />
       )}
     </div>

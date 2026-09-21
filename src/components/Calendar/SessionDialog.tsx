@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, Clock, DollarSign, Trash2, Calendar as CalendarIcon, Save, Repeat } from 'lucide-react';
+import { X, Clock, DollarSign, Trash2, Calendar as CalendarIcon, Save, Repeat, AlertCircle } from 'lucide-react';
 import { execSQL, querySQL } from '../../db/db';
+import { useHolidays } from '../../hooks/useHolidays';
 
 interface Session {
   id: string;
@@ -51,7 +52,16 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ session, onClose, onUpdat
     setDisplayPrice(session.payment_value?.toString() || '');
   }, [session.id]);
 
-  const handleSave = async () => {
+  const [showConfirmDelete, setShowConfirmDelete] = useState<{ isSeries: boolean } | null>(null);
+  const [showHolidaySaveConfirm, setShowHolidaySaveConfirm] = useState(false);
+
+  const sessionDateStr = editedSession.start_time ? editedSession.start_time.slice(0, 10) : '';
+  const sessionYear = sessionDateStr ? new Date(editedSession.start_time).getFullYear() : new Date().getFullYear();
+  const { isHoliday } = useHolidays(sessionYear);
+  const currentHoliday = sessionDateStr ? isHoliday(sessionDateStr) : undefined;
+
+  const executeSave = async () => {
+    setShowHolidaySaveConfirm(false);
     setIsSaving(true);
     try {
       const finalRecurringId = editedSession.recurrence_period && !session.recurring_id 
@@ -101,7 +111,13 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ session, onClose, onUpdat
     }
   };
 
-  const [showConfirmDelete, setShowConfirmDelete] = useState<{ isSeries: boolean } | null>(null);
+  const handleSave = () => {
+    if (currentHoliday && !showHolidaySaveConfirm) {
+      setShowHolidaySaveConfirm(true);
+      return;
+    }
+    executeSave();
+  };
 
   const handleDelete = async (isSeries: boolean) => {
     setShowConfirmDelete(null);
@@ -167,7 +183,40 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ session, onClose, onUpdat
             </div>
           </div>
         )}
-        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+        {showHolidaySaveConfirm && currentHoliday && (
+          <div style={{ 
+            position: 'absolute', inset: 0, backgroundColor: 'var(--bg-secondary)', 
+            zIndex: 1250, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexDirection: 'column', padding: '24px', textAlign: 'center', borderRadius: '16px',
+            border: '1px solid var(--border-color)'
+          }}>
+            <div style={{ padding: '16px', backgroundColor: 'rgba(245, 158, 11, 0.1)', borderRadius: '50%', marginBottom: '16px' }}>
+              <AlertCircle size={36} color="#f59e0b" />
+            </div>
+            <h3 style={{ fontWeight: 'bold', fontSize: '18px', marginBottom: '8px' }}>
+              Agendamento em Feriado
+            </h3>
+            <p style={{ fontSize: '14px', color: 'var(--text-secondary)', marginBottom: '8px', maxWidth: '380px' }}>
+              Esta data coincide com um feriado {currentHoliday.type === 'national' ? 'nacional' : currentHoliday.type === 'state' ? 'estadual' : 'municipal'}:
+            </p>
+            <p style={{ fontSize: '15px', fontWeight: 'bold', color: currentHoliday.type === 'national' ? '#e11d48' : currentHoliday.type === 'state' ? '#2563eb' : '#d97706', marginBottom: '16px' }}>
+              🚩 {currentHoliday.name}
+            </p>
+            <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '24px' }}>
+              Deseja realmente manter e salvar a sessão nesta data?
+            </p>
+            <div style={{ display: 'flex', gap: '12px', width: '100%', maxWidth: '320px' }}>
+              <button onClick={() => setShowHolidaySaveConfirm(false)} className="btn-ghost" style={{ flex: 1, border: '1px solid var(--border-color)' }}>
+                Voltar e Ajustar
+              </button>
+              <button onClick={executeSave} className="btn-primary" style={{ flex: 1 }}>
+                Sim, Salvar
+              </button>
+            </div>
+          </div>
+        )}
+
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <div style={{ width: '40px', height: '40px', borderRadius: '12px', backgroundColor: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white' }}>
               <CalendarIcon size={20} />
@@ -179,6 +228,29 @@ const SessionDialog: React.FC<SessionDialogProps> = ({ session, onClose, onUpdat
           </div>
           <button onClick={onClose} className="btn-ghost" style={{ padding: '8px' }}><X size={20} /></button>
         </header>
+
+        {currentHoliday && (
+          <div style={{
+            padding: '10px 14px',
+            borderRadius: '8px',
+            backgroundColor: currentHoliday.type === 'national' ? 'rgba(225, 29, 72, 0.1)' : currentHoliday.type === 'state' ? 'rgba(37, 99, 235, 0.1)' : 'rgba(217, 119, 6, 0.1)',
+            border: `1px solid ${currentHoliday.type === 'national' ? 'rgba(225, 29, 72, 0.3)' : currentHoliday.type === 'state' ? 'rgba(37, 99, 235, 0.3)' : 'rgba(217, 119, 6, 0.3)'}`,
+            color: currentHoliday.type === 'national' ? '#e11d48' : currentHoliday.type === 'state' ? '#2563eb' : '#d97706',
+            fontSize: '13px',
+            marginBottom: '20px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px'
+          }}>
+            <AlertCircle size={18} />
+            <div>
+              <b>Feriado {currentHoliday.type === 'national' ? 'Nacional' : currentHoliday.type === 'state' ? 'Estadual' : 'Municipal'}:</b> {currentHoliday.name}
+              <div style={{ fontSize: '11px', opacity: 0.85, marginTop: '2px' }}>
+                Esta sessão está agendada para um dia de feriado oficial.
+              </div>
+            </div>
+          </div>
+        )}
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '24px' }}>
           <div className="card" style={{ padding: '16px', backgroundColor: 'var(--bg-primary)', border: 'none' }}>

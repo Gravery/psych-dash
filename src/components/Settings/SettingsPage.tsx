@@ -1,9 +1,40 @@
 import React, { useState, useEffect } from 'react';
-import { Palette, Monitor, Bell, Volume2, Save, Info, AlertTriangle, CheckCircle2, Database, Download, Upload } from 'lucide-react';
+import { Palette, Monitor, Bell, Volume2, Save, Info, AlertTriangle, CheckCircle2, Database, Download, Upload, MapPin, Plus, Trash2 } from 'lucide-react';
 import { execSQL, querySQL } from '../../db/db';
 import bellSound from '../../assets/sounds/bell.wav';
 import digitalSound from '../../assets/sounds/digital.wav';
 import modernSound from '../../assets/sounds/modern.wav';
+
+const BRAZIL_STATES = [
+  { uf: '', label: 'Selecione um estado...' },
+  { uf: 'AC', label: 'Acre (AC)' },
+  { uf: 'AL', label: 'Alagoas (AL)' },
+  { uf: 'AP', label: 'Amapá (AP)' },
+  { uf: 'AM', label: 'Amazonas (AM)' },
+  { uf: 'BA', label: 'Bahia (BA)' },
+  { uf: 'CE', label: 'Ceará (CE)' },
+  { uf: 'DF', label: 'Distrito Federal (DF)' },
+  { uf: 'ES', label: 'Espírito Santo (ES)' },
+  { uf: 'GO', label: 'Goiás (GO)' },
+  { uf: 'MA', label: 'Maranhão (MA)' },
+  { uf: 'MT', label: 'Mato Grosso (MT)' },
+  { uf: 'MS', label: 'Mato Grosso do Sul (MS)' },
+  { uf: 'MG', label: 'Minas Gerais (MG)' },
+  { uf: 'PA', label: 'Pará (PA)' },
+  { uf: 'PB', label: 'Paraíba (PB)' },
+  { uf: 'PR', label: 'Paraná (PR)' },
+  { uf: 'PE', label: 'Pernambuco (PE)' },
+  { uf: 'PI', label: 'Piauí (PI)' },
+  { uf: 'RJ', label: 'Rio de Janeiro (RJ)' },
+  { uf: 'RN', label: 'Rio Grande do Norte (RN)' },
+  { uf: 'RS', label: 'Rio Grande do Sul (RS)' },
+  { uf: 'RO', label: 'Rondônia (RO)' },
+  { uf: 'RR', label: 'Roraima (RR)' },
+  { uf: 'SC', label: 'Santa Catarina (SC)' },
+  { uf: 'SP', label: 'São Paulo (SP)' },
+  { uf: 'SE', label: 'Sergipe (SE)' },
+  { uf: 'TO', label: 'Tocantins (TO)' },
+];
 
 const SettingsPage: React.FC = () => {
   const [accentColor, setAccentColor] = useState('#0ea5e9');
@@ -11,6 +42,11 @@ const SettingsPage: React.FC = () => {
   const [notificationSound, setNotificationSound] = useState('bell');
   const [notificationLeadTime, setNotificationLeadTime] = useState('5');
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const [clinicState, setClinicState] = useState('SP');
+  const [clinicCity, setClinicCity] = useState('');
+  const [customHolidays, setCustomHolidays] = useState<any[]>([]);
+  const [newHolidayDate, setNewHolidayDate] = useState('');
+  const [newHolidayName, setNewHolidayName] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState({ type: '', text: '' });
   const [notifPermission, setNotifPermission] = useState(Notification.permission);
@@ -21,23 +57,67 @@ const SettingsPage: React.FC = () => {
     { id: 'modern', label: 'Ding Moderno', url: modernSound },
   ];
 
+  const loadCustomHolidays = async () => {
+    try {
+      const list: any = await querySQL("SELECT id, date, name, type FROM custom_holidays ORDER BY date ASC");
+      if (Array.isArray(list)) {
+        setCustomHolidays(list);
+      }
+    } catch (e) {
+      console.warn('custom_holidays ainda não acessível:', e);
+    }
+  };
+
   useEffect(() => {
     const loadSettings = async () => {
       try {
-        const rows: any = await querySQL("SELECT key, value FROM config WHERE key IN ('accent_color', 'execution_mode', 'start_with_windows', 'notification_sound')");
-        rows.forEach((row: any) => {
+        const rows: any = await querySQL(
+          "SELECT key, value FROM config WHERE key IN ('accent_color', 'execution_mode', 'start_with_windows', 'notification_sound', 'notification_lead_time', 'notifications_enabled', 'clinic_state', 'clinic_city')"
+        );
+        rows?.forEach((row: any) => {
           if (row.key === 'accent_color') setAccentColor(row.value);
           if (row.key === 'start_with_windows') setStartWithWindows(row.value === 'true');
           if (row.key === 'notification_sound') setNotificationSound(row.value);
           if (row.key === 'notification_lead_time') setNotificationLeadTime(row.value);
           if (row.key === 'notifications_enabled') setNotificationsEnabled(row.value === 'true');
+          if (row.key === 'clinic_state') setClinicState(row.value);
+          if (row.key === 'clinic_city') setClinicCity(row.value);
         });
       } catch (err) {
         console.error('Erro ao carregar configurações:', err);
       }
+      await loadCustomHolidays();
     };
     loadSettings();
   }, []);
+
+  const handleAddCustomHoliday = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newHolidayDate || !newHolidayName.trim()) return;
+    try {
+      const id = crypto.randomUUID();
+      await execSQL(
+        "INSERT INTO custom_holidays (id, date, name, type) VALUES (?, ?, ?, ?)",
+        [id, newHolidayDate, newHolidayName.trim(), 'municipal']
+      );
+      setNewHolidayDate('');
+      setNewHolidayName('');
+      await loadCustomHolidays();
+      window.dispatchEvent(new Event('holidays-updated'));
+    } catch (err) {
+      console.error('Erro ao adicionar feriado customizado:', err);
+    }
+  };
+
+  const handleDeleteCustomHoliday = async (id: string) => {
+    try {
+      await execSQL("DELETE FROM custom_holidays WHERE id = ?", [id]);
+      await loadCustomHolidays();
+      window.dispatchEvent(new Event('holidays-updated'));
+    } catch (err) {
+      console.error('Erro ao excluir feriado customizado:', err);
+    }
+  };
 
   const handleSave = async () => {
     setIsSaving(true);
@@ -48,17 +128,20 @@ const SettingsPage: React.FC = () => {
         ['start_with_windows', startWithWindows.toString()],
         ['notification_sound', notificationSound],
         ['notification_lead_time', notificationLeadTime],
-        ['notifications_enabled', notificationsEnabled.toString()]
+        ['notifications_enabled', notificationsEnabled.toString()],
+        ['clinic_state', clinicState],
+        ['clinic_city', clinicCity]
       ];
 
       for (const [key, value] of settings) {
         await execSQL("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", [key, value]);
       }
 
-      // Aplicar cor imediatamente
+      window.dispatchEvent(new Event('config-updated'));
+      window.dispatchEvent(new Event('holidays-updated'));
+
       document.documentElement.style.setProperty('--accent-primary', accentColor);
 
-      // Notificar Electron sobre mudanças de sistema (se aplicável)
       if ((window as any).electronAPI) {
         (window as any).electronAPI.updateAppSettings({ 
           startWithWindows
@@ -253,6 +336,120 @@ const SettingsPage: React.FC = () => {
             <div style={{ fontSize: '13px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Info size={16} /> Você receberá um alerta visual e sonoro antes de cada sessão agendada.
             </div>
+          </div>
+        </section>
+
+        {/* Seção de Localização e Feriados Regionais */}
+        <section className="card glass">
+          <h2 style={{ fontSize: '18px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--text-primary)' }}>
+            <MapPin size={20} color="var(--accent-primary)" /> Localização da Clínica & Feriados Regionais
+          </h2>
+          <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '20px' }}>
+            Selecione seu Estado e Cidade para carregar automaticamente os feriados estaduais correspondentes na sua agenda e cadastrar datas municipais.
+          </p>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '24px' }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500', color: 'var(--text-primary)' }}>
+                Estado (UF)
+              </label>
+              <select
+                value={clinicState}
+                onChange={(e) => setClinicState(e.target.value)}
+                style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+              >
+                {BRAZIL_STATES.map(st => (
+                  <option key={st.uf} value={st.uf}>{st.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: '500', color: 'var(--text-primary)' }}>
+                Cidade
+              </label>
+              <input
+                type="text"
+                placeholder="Ex: Araras, São Paulo, Curitiba..."
+                value={clinicCity}
+                onChange={(e) => setClinicCity(e.target.value)}
+                style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+              />
+            </div>
+          </div>
+
+          {/* Feriados Municipais / Específicos da Clínica */}
+          <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '20px' }}>
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ fontWeight: '600', display: 'block', color: 'var(--text-primary)' }}>Feriados Municipais & Locais</label>
+              <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                Cadastre feriados ou datas municipais da sua cidade que não constam nas listas nacionais/estaduais.
+              </p>
+            </div>
+
+            <form onSubmit={handleAddCustomHoliday} style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap' }}>
+              <input
+                type="date"
+                value={newHolidayDate}
+                onChange={(e) => setNewHolidayDate(e.target.value)}
+                style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                required
+              />
+              <input
+                type="text"
+                placeholder="Nome (ex: Aniversário da Cidade, Padroeiro)"
+                value={newHolidayName}
+                onChange={(e) => setNewHolidayName(e.target.value)}
+                style={{ flex: 1, minWidth: '220px', padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                required
+              />
+              <button
+                type="submit"
+                className="btn-primary"
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', fontSize: '13px' }}
+              >
+                <Plus size={16} /> Adicionar
+              </button>
+            </form>
+
+            {customHolidays.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '180px', overflowY: 'auto' }}>
+                {customHolidays.map((h: any) => (
+                  <div
+                    key={h.id}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '8px 12px',
+                      backgroundColor: 'var(--bg-primary)',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border-color)',
+                      fontSize: '13px'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <span style={{ fontWeight: '600', color: '#d97706' }}>
+                        {new Date(h.date + 'T12:00:00').toLocaleDateString('pt-BR')}
+                      </span>
+                      <span>{h.name}</span>
+                      <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(217, 119, 6, 0.1)', color: '#d97706', fontWeight: 'bold' }}>
+                        Municipal
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteCustomHoliday(h.id)}
+                      className="btn-ghost"
+                      style={{ padding: '4px', color: 'var(--error)' }}
+                      title="Excluir feriado"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </section>
 
